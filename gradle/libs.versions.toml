@@ -1,0 +1,29 @@
+[versions]
+java = "25"
+mirage = "0.1.0"
+
+# 字节码
+asm = "9.9"    # 9.7 不支持 Java 25 (class v69)，A2 必须能读 MC 26.x 的 mod jar
+mixin = "0.8.7"   # 临时用 upstream，M3 切到自维护 fork
+
+# 日志
+log4j = "2.24.1"
+
+# 工具
+gson = "2.11.0"
+guava = "33.4.0-jre"
+
+# 构建
+gradlePlugin = "9.0.0"
+
+[libraries]
+asm-core = { module = "org.ow2.asm:asm", version.ref = "asm" }
+asm-commons = { module = "org.ow2.asm:asm-commons", version.ref = "asm" }
+asm-tree = { module = "org.ow2.asm:asm-tree", version.ref = "asm" }
+asm-analysis = { module = "org.ow2.asm:asm-analysis", version.ref = "asm" }
+asm-util = { module = "org.ow2.asm:asm-util", version.ref = "asm" }
+mixin = { module = "org.spongepowered:mixin", version.ref = "mixin" }
+gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
+guava = { module = "com.google.guava:guava", version.ref = "guava" }
+log4j-api = { module = "org.apache.logging.log4j:log4j-api", version.ref = "log4j" }
+log4j-core = { module = "org.apache.logging.log4j:log4j-core", version.ref = "log4j" }

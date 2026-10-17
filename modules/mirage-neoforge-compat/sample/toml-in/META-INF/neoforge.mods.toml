@@ -1,0 +1,18 @@
+modLoader="javafml"
+loaderVersion="[1,)"
+license="MIT"
+issueTrackerURL="https://example.com/issues"
+
+[[mods]]
+    modId="exampleneomod"
+    version="1.0.0"
+    displayName="Example NeoMod"
+    authors="Example Author"
+    description="A minimal NeoForge mod fixture for mirage-neoforge-compat"
+
+[[dependencies.exampleneomod]]
+    modId="neoforge"
+    mandatory=true
+    versionRange="[1,)"
+    ordering="NONE"
+    side="BOTH"

@@ -1,0 +1,11 @@
+{
+  "required": true,
+  "package": "io.mirage.mixin",
+  "mixins": [
+    "MirageTestMixin"
+  ],
+  "client": [],
+  "injectors": {
+    "defaultRequire": 0
+  }
+}

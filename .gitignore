@@ -1,0 +1,35 @@
+# Gradle
+.gradle/
+build/
+**/build/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 本地 MC 运行时缓存
+run/
+runs/
+logs/
+*.log
+
+# 本地敏感
+local.properties
+
+# 根目录误散落的 class 与 mdk 分发产物（本仓库应只放源码）
+/io/
+**/dist/
+*.class
+
+# flock.ps1 运行时状态（会话/锁文件，本地沙盒，不进 git）
+.flock/

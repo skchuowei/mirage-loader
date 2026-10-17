@@ -1,0 +1,224 @@
+{
+  "mirageSpecVersion": "0.1",
+  "mod": {
+    "id": "examplemod",
+    "version": "1.0.0",
+    "group": "",
+    "environment": "BOTH",
+    "entrypoints": {
+      "main": [
+        "com.example.ExampleMod"
+      ],
+      "client": [],
+      "server": []
+    },
+    "accessWideners": []
+  },
+  "dependencies": [],
+  "transforms": [],
+  "events": [],
+  "registries": [],
+  "resources": {
+    "namespaces": [
+      "examplemod"
+    ]
+  },
+  "classes": [
+    {
+      "name": "com/example/ExampleMod",
+      "superClass": "java/lang/Object",
+      "interfaces": [],
+      "access": [
+        "PUBLIC"
+      ],
+      "annotations": [],
+      "methods": [
+        {
+          "name": "<init>",
+          "desc": "()V",
+          "access": [
+            "PUBLIC"
+          ],
+          "annotations": []
+        },
+        {
+          "name": "onInitialize",
+          "desc": "()V",
+          "access": [
+            "PUBLIC"
+          ],
+          "annotations": []
+        },
+        {
+          "name": "<clinit>",
+          "desc": "()V",
+          "access": [
+            "STATIC"
+          ],
+          "annotations": []
+        }
+      ],
+      "fields": [
+        {
+          "name": "MIRAGE_BLOCK_KEY",
+          "desc": "Lnet/minecraft/resources/ResourceKey;",
+          "access": [
+            "PUBLIC",
+            "STATIC",
+            "FINAL"
+          ],
+          "annotations": []
+        },
+        {
+          "name": "MIRAGE_BLOCK",
+          "desc": "Lnet/minecraft/world/level/block/Block;",
+          "access": [
+            "PUBLIC",
+            "STATIC",
+            "FINAL"
+          ],
+          "annotations": []
+        },
+        {
+          "name": "MIRAGE_ITEM_KEY",
+          "desc": "Lnet/minecraft/resources/ResourceKey;",
+          "access": [
+            "PUBLIC",
+            "STATIC",
+            "FINAL"
+          ],
+          "annotations": []
+        },
+        {
+          "name": "MIRAGE_ITEM",
+          "desc": "Lnet/minecraft/world/item/Item;",
+          "access": [
+            "PUBLIC",
+            "STATIC",
+            "FINAL"
+          ],
+          "annotations": []
+        }
+      ]
+    }
+  ],
+  "methodCalls": [
+    {
+      "from": "com/example/ExampleMod",
+      "to": "net/minecraft/world/item/BlockItem",
+      "method": "<init>",
+      "desc": "(Lnet/minecraft/world/level/block/Block;Lnet/minecraft/world/item/Item$Properties;)V"
+    },
+    {
+      "from": "com/example/ExampleMod",
+      "to": "net/minecraft/resources/ResourceKey",
+      "method": "create",
+      "desc": "(Lnet/minecraft/resources/ResourceKey;Lnet/minecraft/resources/Identifier;)Lnet/minecraft/resources/ResourceKey;"
+    },
+    {
+      "from": "com/example/ExampleMod",
+      "to": "net/minecraft/world/level/block/state/BlockBehaviour$Properties",
+      "method": "setId",
+      "desc": "(Lnet/minecraft/resources/ResourceKey;)Lnet/minecraft/world/level/block/state/BlockBehaviour$Properties;"
+    },
+    {
+      "from": "com/example/ExampleMod",
+      "to": "net/minecraft/world/level/block/state/BlockBehaviour$Properties",
+      "method": "of",
+      "desc": "()Lnet/minecraft/world/level/block/state/BlockBehaviour$Properties;"
+    },
+    {
+      "from": "com/example/ExampleMod",
+      "to": "java/lang/String",
+      "method": "valueOf",
+      "desc": "(Ljava/lang/Object;)Ljava/lang/String;"
+    },
+    {
+      "from": "com/example/ExampleMod",
+      "to": "net/minecraft/resources/Identifier",
+      "method": "fromNamespaceAndPath",
+      "desc": "(Ljava/lang/String;Ljava/lang/String;)Lnet/minecraft/resources/Identifier;"
+    },
+    {
+      "from": "com/example/ExampleMod",
+      "to": "net/minecraft/world/level/block/state/BlockBehaviour$Properties",
+      "method": "mapColor",
+      "desc": "(Lnet/minecraft/world/level/material/MapColor;)Lnet/minecraft/world/level/block/state/BlockBehaviour$Properties;"
+    },
+    {
+      "from": "com/example/ExampleMod",
+      "to": "java/lang/Object",
+      "method": "<init>",
+      "desc": "()V"
+    },
+    {
+      "from": "com/example/ExampleMod",
+      "to": "java/io/PrintStream",
+      "method": "println",
+      "desc": "(Ljava/lang/String;)V"
+    },
+    {
+      "from": "com/example/ExampleMod",
+      "to": "net/minecraft/core/Registry",
+      "method": "register",
+      "desc": "(Lnet/minecraft/core/Registry;Lnet/minecraft/resources/Identifier;Ljava/lang/Object;)Ljava/lang/Object;"
+    },
+    {
+      "from": "com/example/ExampleMod",
+      "to": "net/minecraft/resources/ResourceKey",
+      "method": "identifier",
+      "desc": "()Lnet/minecraft/resources/Identifier;"
+    },
+    {
+      "from": "com/example/ExampleMod",
+      "to": "net/minecraft/core/DefaultedRegistry",
+      "method": "key",
+      "desc": "()Lnet/minecraft/resources/ResourceKey;"
+    },
+    {
+      "from": "com/example/ExampleMod",
+      "to": "net/minecraft/world/item/Item$Properties",
+      "method": "<init>",
+      "desc": "()V"
+    },
+    {
+      "from": "com/example/ExampleMod",
+      "to": "net/minecraft/world/level/block/state/BlockBehaviour$Properties",
+      "method": "strength",
+      "desc": "(F)Lnet/minecraft/world/level/block/state/BlockBehaviour$Properties;"
+    },
+    {
+      "from": "com/example/ExampleMod",
+      "to": "net/minecraft/world/level/block/Block",
+      "method": "<init>",
+      "desc": "(Lnet/minecraft/world/level/block/state/BlockBehaviour$Properties;)V"
+    },
+    {
+      "from": "com/example/ExampleMod",
+      "to": "net/minecraft/world/item/Item$Properties",
+      "method": "setId",
+      "desc": "(Lnet/minecraft/resources/ResourceKey;)Lnet/minecraft/world/item/Item$Properties;"
+    }
+  ],
+  "mixinTargets": [],
+  "unresolved": [
+    {
+      "className": "com/example/ExampleMod",
+      "method": "onInitialize()V",
+      "reason": "invokedynamic/lambda",
+      "name": "makeConcatWithConstants",
+      "desc": "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+      "_src": {
+        "origin": "STATIC",
+        "confidence": "LOW",
+        "unresolved": true
+      }
+    }
+  ],
+  "_stats": {
+    "classCount": 1,
+    "methodCount": 3,
+    "methodCallCount": 16,
+    "unresolvedCount": 1
+  }
+}

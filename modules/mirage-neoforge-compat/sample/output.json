@@ -1,0 +1,75 @@
+{
+  "mirageSpecVersion": "0.1",
+  "mod": {
+    "id": "exampleneomod",
+    "version": "1.0.0",
+    "group": "",
+    "environment": "BOTH",
+    "entrypoints": {
+      "main": [
+        "com.example.neomod.NeoModMain"
+      ],
+      "client": [],
+      "server": []
+    },
+    "accessWideners": []
+  },
+  "dependencies": [
+    {
+      "modId": "neoforge",
+      "version": "[1,)",
+      "type": "REQUIRED",
+      "side": "BOTH"
+    }
+  ],
+  "events": [
+    {
+      "owner": "com/example/neomod/NeoModMain",
+      "method": "onEvent",
+      "desc": "(Lorg/objectworld/Event;)V",
+      "eventType": "org/objectworld/Event",
+      "priority": 1000,
+      "receiveCancelled": false,
+      "_src": {
+        "origin": "STATIC",
+        "confidence": "MEDIUM"
+      }
+    }
+  ],
+  "registries": [
+    {
+      "owner": "com/example/neomod/NeoModMain",
+      "field": "ITEMS",
+      "declaredType": "Lnet/neoforged/neoforge/registries/DeferredRegister;",
+      "modIdHint": "exampleneomod",
+      "_src": {
+        "origin": "STATIC",
+        "confidence": "LOW"
+      }
+    }
+  ],
+  "resources": {
+    "namespaces": [
+      "exampleneomod"
+    ]
+  },
+  "_diagnostics": {
+    "classes": [
+      "com/example/neomod/NeoModMain",
+      "net/neoforged/bus/api/SubscribeEvent",
+      "net/neoforged/fml/common/Mod",
+      "net/neoforged/neoforge/registries/DeferredRegister",
+      "org/objectworld/Event"
+    ],
+    "mixinTargets": [],
+    "unresolved": [
+      "toml: loaderVersion=[1,) license=MIT (未桥接到运行时)"
+    ],
+    "stats": {
+      "classCount": 5,
+      "eventListenerCount": 1,
+      "registryHintCount": 1,
+      "dependencyCount": 1
+    }
+  }
+}

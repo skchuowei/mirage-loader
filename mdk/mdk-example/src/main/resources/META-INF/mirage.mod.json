@@ -1,0 +1,10 @@
+{
+  "id": "mdk-example",
+  "version": "1.0.0",
+  "name": "Mirage MDK Example",
+  "description": "Mirage Loader 示例 Mod 模板",
+  "authors": ["Your Name"],
+  "entrypoint": "com.example.mdk.MdkExampleMod",
+  "dependencies": {},
+  "side": "both"
+}

@@ -1,0 +1,22 @@
+{
+  "mirageSpecVersion": "0.1",
+  "mod": {
+    "id": "mdk-example",
+    "version": "1.0.0",
+    "group": "",
+    "environment": "BOTH",
+    "entrypoints": {
+      "main": ["com.example.mdk.MdkExampleMod"],
+      "client": [],
+      "server": []
+    },
+    "accessWideners": []
+  },
+  "dependencies": [],
+  "transforms": [],
+  "events": [],
+  "registries": [],
+  "resources": {
+    "namespaces": ["mdk-example"]
+  }
+}
