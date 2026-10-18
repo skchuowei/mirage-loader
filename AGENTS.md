@@ -270,3 +270,63 @@ mirage-loader/
 * `mc-shili/` 下的产物也**不要 `git add`**——它在仓库外，本来就不进版本库。
 * 同样受保护的还有：`26.2/`（vanilla 官方目录）、`refs/`（只读参考源码）、`backups/`（历史快照）。
 
+---
+
+## MC Mod 工程技术注意事项（踩坑档案）
+
+> 以下为本项目特有的技术坑，不是流程规则，是调试时容易踩的雷。遇到"日志正常但功能不生效"类问题，先回这一节查。
+
+### 1. fat jar 打包一致性
+
+- 部署到 `mc-shili/libraries/io/mirage/mirage-launch/0.1.0/mirage-launch-0.1.0.jar` 的是 **fat jar**（shade 插件把 SpongePowered Mixin、ASM、Gson 等依赖全部打进去的单 jar）。
+- **改了任何 `.java` 后，必须重新走完整 `gradle build` 重打 fat jar**，不能只编译单个 `.class` 热替换——除非明确知道只改了一个类、且不涉及 mixin 配置文件或 `META-INF/services/`。
+- 热替换单个 class 时：只 `jar uf` 覆盖目标 class，**不要动 `META-INF/services/`、不要动依赖 jar、不要重打整个 fat jar**（重打容易漏 asm-util、漏 services 注册文件，之前踩过）。
+- **日志行为和当前源码对不上时，先查 jar 构建时间**：`ls -l mc-shili/libraries/.../mirage-launch-0.1.0.jar`，对比 git commit 时间。如果 jar 是旧的，你看的源码是新改的/回滚后的，两者不是同一套字节码，不要在源码里瞎找原因。
+
+### 2. Mixin 配置与类文件一致性（`defaultRequire: 0` 陷阱）
+
+- `mirage.mixins.json` 里 `package` 下注册的每个 mixin 类（包括 `mixins` / `client` / `server` 数组里的每个字符串），**必须在 fat jar 里有对应的 `.class` 文件**。
+- **`defaultRequire: 0`（或单个 mixin 配 `"required": false`）的行为**：Mixin 找不到注册的类时**不会崩溃**，只是静默跳过这个 mixin，日志里只打一条 warning 甚至不打。表现为："Mixin 配置加载成功了、游戏正常启动、但目标 mixin 完全没生效"。
+- 这就是"日志看着正常，但新写的 Mixin 不工作"的头号原因——**不是注入逻辑错了，是那个类根本没打进 jar**。
+- 提交前检查：
+  ```powershell
+  jar tf mc-shili/libraries/.../mirage-launch-0.1.0.jar | Select-String "mixin"
+  ```
+  对比 `mirage.mixins.json` 里注册的类名，确认每个都在 jar 里。
+- 如果 mixin 不生效，**第一步查它有没有被打进 jar，第二步才查注入点写法**。
+
+### 3. 双注入路径：自研 ASM Transformer vs SpongePowered Mixin
+
+- 本项目历史上有**两条字节码注入路径**：
+  1. `MirageTransformer`（自研 ASM，早期版本用来直接改 MC 类）——当前已禁用，`transform()` 直接返回原始 class 不做修改；
+  2. SpongePowered Mixin（实际生效的注入框架）。
+- 调试时先确认哪条路径在跑：
+  - 日志出现 `[Mirage] 织入 xxx` → 自研 ASM 路径在工作；
+  - 日志出现 `Mixin transformer xxx from mirage.mixins.json` → Mixin 路径在工作。
+- **两条路径不要同时改同一个 MC 目标类**——会冲突，一个改了字节码另一个再改会抛 `ClassFormatError` 或静默失效。
+
+### 4. Mixin 注解处理器（AP）——为什么能访问原版 protected 成员
+
+- Mixin 类里直接访问原版 MC 类的 `protected` 字段/方法（如 `AbstractContainerScreen.leftPos`、`Minecraft.player`），**能编译通过**是靠 **Mixin Annotation Processor** 在编译期改写 AST 实现的——它在 javac 阶段把 mixin 类"嫁接"到目标类上，放开访问权限校验。
+- 普通 `javac SomeMixin.java` 单独编译会报 `leftPos has protected access`——**这是正常的，不代表代码错了**。
+- 必须走 Gradle 构建（开启 mixin AP）才能正确编译。Accessor / Invoker 接口（如 `CreativeModeTabAccessor`）同理，AP 在编译期生成实现类。
+- 结论：不要拿单文件 javac 的编译结果去判断 mixin 代码对不对，以 `gradle build` 为准。
+
+### 5. 时间线三方对齐
+
+调试崩溃问题时，三个时间必须对齐：
+1. **git commit 时间**（源码状态）；
+2. **fat jar 构建时间**（实际跑的字节码）；
+3. **崩溃日志时间戳**。
+
+- 日志里出现的行为和当前源码不一致时，90% 是 jar 是旧版本——先 `ls -l` 看 jar 时间，再决定改不改源码。
+- 代码回滚后**必须重新打 fat jar**，否则跑的还是回滚前的字节码，你看的是回滚后的源码，两边对不上。
+
+### 6. 查原版类成员签名用 javap
+
+- 怀疑字段访问权限/方法签名对不上时，用 JDK 自带 `javap` 查 MC class：
+  ```powershell
+  javap -p -classpath "26.2\libraries\...\net.minecraft.client-26.2.jar" net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
+  ```
+- `-p` 显示 private/protected 成员。26.x 无混淆，字段名方法名就是源码里的名字，可以直接对照。
+
