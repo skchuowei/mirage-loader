@@ -26,8 +26,6 @@ public class MirageTransformer {
             return transformTitleScreen(original);
         }
         if ("net/minecraft/client/gui/screens/inventory/CreativeModeInventoryScreen".equals(cn)) {
-            // 标签页分页织入暂时禁用——ASM 字节码改写破坏了原版 extractTabButton/getTabX 的栈帧
-            // 等重写后再启用
             return original;
         }
         if ("net/minecraft/server/packs/VanillaPackResourcesBuilder".equals(cn)) {
@@ -56,7 +54,7 @@ public class MirageTransformer {
                     mv.visitCode();
                     mv.visitFieldInsn(Opcodes.GETSTATIC,
                             "net/minecraft/world/item/CreativeModeTab$Row",
-                            "TOP", "Lnet/minecraft/world/item/CreativeModeTab$Row;");
+                            "BOTTOM", "Lnet/minecraft/world/item/CreativeModeTab$Row;");
                     mv.visitInsn(Opcodes.ICONST_0);
                     mv.visitMethodInsn(Opcodes.INVOKESTATIC,
                             "net/minecraft/world/item/CreativeModeTab",

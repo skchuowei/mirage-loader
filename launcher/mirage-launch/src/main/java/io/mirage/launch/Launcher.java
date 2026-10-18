@@ -214,7 +214,38 @@ public final class Launcher {
                     try {
                         Object value = e.getValue().get();
                         Object id = idFactory.invoke(null, dr.modId(), e.getKey());
+                        // CreativeModeTab.Builder.build() 不自动 setId，没有 intrusive holder，
+                        // MappedRegistry.register 会断言失败。手动创建 intrusive holder 塞进去。
+                        if ("creativemodetab".equals(regName)) {
+                            try {
+                                Class<?> holderRefCls = Class.forName("net.minecraft.core.Holder$Reference", true, mcl);
+                                java.lang.reflect.Method createIntrusive = holderRefCls
+                                        .getMethod("createIntrusive", Class.forName("net.minecraft.core.HolderOwner", true, mcl), Object.class);
+                                Object ref = createIntrusive.invoke(null, reg, value);
+                                ((java.util.Map<Object, Object>) unregField.get(reg)).put(value, ref);
+                            } catch (Exception ihEx) {
+                                System.err.println("[Mirage] createIntrusive 失败 " + ihEx);
+                            }
+                        }
                         regRegisterMethod.invoke(null, reg, id, value);
+                        // BlockItem 构造不自动绑 block.item，手动反射绑定，否则 block.asItem()=AIR
+                        // 导致 creative tab 构建时 new ItemStack(AIR) count=0 崩溃
+                        try {
+                            if ("item".equals(regName)) {
+                                Class<?> blockItemCls = Class.forName("net.minecraft.world.item.BlockItem", true, mcl);
+                                if (blockItemCls.isInstance(value)) {
+                                    java.lang.reflect.Field bf = blockItemCls.getDeclaredField("block");
+                                    bf.setAccessible(true);
+                                    Object b = bf.get(value);
+                                    Class<?> blockCls = Class.forName("net.minecraft.world.level.block.Block", true, mcl);
+                                    java.lang.reflect.Field iff = blockCls.getDeclaredField("item");
+                                    iff.setAccessible(true);
+                                    iff.set(b, value);
+                                }
+                            }
+                        } catch (Exception bindEx) {
+                            System.err.println("[Mirage] 绑定 block.item 失败: " + bindEx);
+                        }
                         // bug #1 真修复：Properties.setId() 在 Block/Item 构造时创建 intrusive
                         // Holder.Reference 塞进 unregisteredIntrusiveHolders。Registry.register
                         // 在 unfreeze 的 registry 上不总是把它移走，freeze() 会报
@@ -227,6 +258,7 @@ public final class Launcher {
                     } catch (Exception ex) {
                         System.err.println("[Mirage] DeferredRegister 注册失败 "
                                 + dr.modId() + ":" + e.getKey() + " -> " + ex);
+                        ex.printStackTrace();
                     }
                 }
             });

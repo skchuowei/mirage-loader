@@ -224,5 +224,225 @@ public final class MirageDebug {
         }
     }
 
+    // =====================================================================
+    //  创造模式物品栏"便签页"（CreativeModeTab）分页切换
+    //
+    //  原版 TOP / BOTTOM 行各只有 7 个槽位（column 0..6），贴图数组长度固定为 7。
+    //  当 Mod 注册的 tab 超过 7 个时，column>6 的 tab 会跑出 GUI 并数组越界。
+    //  这里做分页：按 row 分组排序，每行每页显示 7 个，翻页切换。
+    // =====================================================================
+
+    /** 当前页（从 0 开始） */
+    public static volatile int tabPage = 0;
+    /** 每行每页槽位数（与原版贴图数组长度一致） */
+    public static final int TABS_PER_PAGE = 7;
+
+    // ---- 反射缓存（编译期无 MC jar，全部走反射） ----
+    private static boolean tabReflectReady = false;
+    private static Method m_tabs;          // CreativeModeTabs.tabs() : List
+    private static java.lang.reflect.Field f_tabColumn;     // CreativeModeTab.column : int（直接读字段，绕开getter的bootstrap检查）
+    private static java.lang.reflect.Field f_tabRow;        // CreativeModeTab.row : Row
+    private static java.lang.reflect.Field f_tabType;       // CreativeModeTab.type : Type
+    private static Object rowTop;           // CreativeModeTab$Row.TOP
+    private static Object rowBottom;       // CreativeModeTab$Row.BOTTOM
+    private static Object typeSearch;       // CreativeModeTab$Type.SEARCH
+    /** 排序后的 TOP 行 tab 列表 */
+    private static volatile java.util.List<Object> sortedTop = new java.util.ArrayList<>();
+    /** 排序后的 BOTTOM 行 tab 列表 */
+    private static volatile java.util.List<Object> sortedBottom = new java.util.ArrayList<>();
+    /** 总行数（取 TOP/BOTTOM 中较多的那个算页数） */
+    private static volatile int totalPages = 1;
+
+    private static void ensureTabReflect() {
+        if (tabReflectReady) return;
+        try {
+            Class<?> cTabs = Class.forName("net.minecraft.world.item.CreativeModeTabs");
+            m_tabs = cTabs.getMethod("tabs");
+            m_tabs.setAccessible(true);
+            Class<?> cTab = Class.forName("net.minecraft.world.item.CreativeModeTab");
+            // 直接读字段，不调用getter方法，绕开26.2里getter内部的bootstrap检查
+            f_tabColumn = cTab.getDeclaredField("column");
+            f_tabColumn.setAccessible(true);
+            f_tabRow = cTab.getDeclaredField("row");
+            f_tabRow.setAccessible(true);
+            f_tabType = cTab.getDeclaredField("type");
+            f_tabType.setAccessible(true);
+            Class<?> cRow = Class.forName("net.minecraft.world.item.CreativeModeTab$Row");
+            rowTop = Enum.valueOf(cRow.asSubclass(Enum.class), "TOP");
+            rowBottom = Enum.valueOf(cRow.asSubclass(Enum.class), "BOTTOM");
+            Class<?> cType = Class.forName("net.minecraft.world.item.CreativeModeTab$Type");
+            typeSearch = Enum.valueOf(cType.asSubclass(Enum.class), "SEARCH");
+            tabReflectReady = true;
+            System.out.println("[Mirage] 标签页反射就绪（直接读字段）");
+        } catch (Throwable t) {
+            System.err.println("[Mirage] 标签页反射初始化失败，完整栈: " + t);
+            t.printStackTrace();
+            tabReflectReady = false;
+            totalPages = 1; // 反射失败时不启用分页，不画翻页按钮
+        }
+    }
+
+    /** 计算 totalPages：遍历 tabs() 找最大 column */
+    @SuppressWarnings("unchecked")
+    private static void rebuildTabPages() {
+        ensureTabReflect();
+        if (!tabReflectReady) return;
+        try {
+            java.util.List<Object> all = (java.util.List<Object>) m_tabs.invoke(null);
+            int maxCol = 0;
+            for (Object tab : all) {
+                try {
+                    Object type = f_tabType.get(tab);
+                    if (typeSearch != null && typeSearch.equals(type)) continue;
+                    int col = f_tabColumn.getInt(tab);
+                    if (col > maxCol) maxCol = col;
+                } catch (Throwable inner) {
+                    System.err.println("[Mirage] 标签页检查失败: " + inner);
+                }
+            }
+            totalPages = Math.max(1, (maxCol + TABS_PER_PAGE) / TABS_PER_PAGE);
+            System.out.println("[Mirage] 重建标签页: 最大列=" + maxCol + " totalPages=" + totalPages);
+        } catch (Throwable t) {
+            System.err.println("[Mirage] 重建标签页失败: " + t);
+            if (t.getCause() != null) t.getCause().printStackTrace();
+            totalPages = 2; // 兜底至少 2 页
+        }
+    }
+
+    /**
+     * 计算 tab 在当前页的显示列号。
+     * 直接用 tab.column() - tabPage*7，不依赖排序列表。
+     * @return 0..6 表示显示列；-1 表示该 tab 不在当前页（应隐藏/离屏）
+     */
+    public static int getDisplayColumn(Object tab) {
+        if (tab == null) return 0;
+        ensureTabReflect();
+        if (!tabReflectReady) return 0; // 反射完全没初始化成功时：不做分页、不隐藏任何标签，返回0正常显示
+        try {
+            int col = f_tabColumn.getInt(tab);
+            int displayCol = col - tabPage * TABS_PER_PAGE;
+            if (displayCol < 0 || displayCol >= TABS_PER_PAGE) return -1; // 明确算出来不在当前页，才标记为不可见
+            return displayCol;
+        } catch (Throwable t) {
+            return 0; // 单个tab反射失败时：默认它在当前页正常显示，不隐藏，避免反射抖动导致所有标签消失
+        }
+    }
+
+    /** 当前总页数 */
+    public static int getTotalPages() {
+        if (sortedTop.isEmpty() && sortedBottom.isEmpty()) rebuildTabPages();
+        return totalPages;
+    }
+
+    /** extractTabButton 开头调用：是否应该绘制这个 tab */
+    public static boolean shouldDrawTab(Object tab) {
+        return getDisplayColumn(tab) >= 0;
+    }
+
+    /** extractTabButton 里替换 column：返回安全的显示列 0-6 */
+    public static int remapColumn(Object tab) {
+        int c = getDisplayColumn(tab);
+        if (c < 0) return 0; // 修复：不可见tab直接返回0兜底，不再强制把所有负列号c=0
+        if (c > 6) c = 6;
+        return c;
+    }
+
+    /** getTabX 里替换返回值：displayCol*27，不在当前页则离屏 */
+    public static int remapTabX(Object tab) {
+        int c = getDisplayColumn(tab);
+        if (c < 0) return -1000;
+        // TOP 行 tab 是右对齐的：x = imageWidth - 27*(7-c) - 1
+        // BOTTOM 行是左对齐的：x = c*27
+        boolean topRow = false;
+        try {
+            Object row = f_tabRow.get(tab);
+            topRow = (rowTop != null && rowTop.equals(row));
+        } catch (Throwable t) {}
+        if (topRow) {
+            return currentImageWidth - 27 * (7 - c) - 1;
+        }
+        return c * 27;
+    }
+
+    /** 翻页（dir = -1 上一页，+1 下一页） */
+    public static void flipPage(int dir) {
+        if (totalPages <= 1) return;
+        tabPage = ((tabPage + dir) % totalPages + totalPages) % totalPages;
+        System.out.println("[Mirage] 标签页 -> " + tabPage + "/" + totalPages);
+    }
+
+    // ---- 翻页按钮屏幕区域（相对 GUI 左上角 leftPos/topPos 的偏移） ----
+    private static final int ARROW_W = 16;
+    private static final int ARROW_H = 12;
+    /** 当前 GUI 宽度（drawTabPageControls 里更新） */
+    public static int currentImageWidth = 176;
+
+    /**
+     * 在创造模式物品栏上绘制翻页按钮和页码。
+     * ASM 在 extractBackground() return 前调用。
+     */
+    public static void drawTabPageControls(Object gge, int leftPos, int topPos,
+                                           int imageWidth, int imageHeight, Object font) {
+        if (gge == null) return;
+        currentImageWidth = imageWidth;
+        if (sortedTop.isEmpty() && sortedBottom.isEmpty()) rebuildTabPages();
+        if (totalPages <= 1) return; // 只有一页不画
+
+        try {
+            // 箭头垂直位置：GUI 顶部上方（和 TOP tab 同一行）
+            int arrowY = topPos - 28;
+            // 左箭头：GUI 左边外侧
+            int leftX = leftPos - ARROW_W - 2;
+            // 右箭头：GUI 右边外侧
+            int rightX = leftPos + imageWidth + 2;
+
+            // 用 GuiGraphicsExtractor.fill 画箭头底
+            java.lang.reflect.Method fill = gge.getClass().getMethod("fill",
+                int.class, int.class, int.class, int.class, int.class);
+            // 左箭头（灰色，首页时变暗）
+            int leftColor = (tabPage > 0) ? 0xFFAAAAAA : 0xFF555555;
+            fill.invoke(gge, leftX, arrowY, leftX + ARROW_W, arrowY + ARROW_H, leftColor);
+            // 右箭头（灰色，末页时变暗）
+            int rightColor = (tabPage < totalPages - 1) ? 0xFFAAAAAA : 0xFF555555;
+            fill.invoke(gge, rightX, arrowY, rightX + ARROW_W, arrowY + ARROW_H, rightColor);
+
+            // 画箭头符号（用文字 < 和 >）
+            if (font != null) {
+                drawTextSafe(gge, font, "<", leftX + 4, arrowY + 2, 0xFFFFFFFF);
+                drawTextSafe(gge, font, ">", rightX + 4, arrowY + 2, 0xFFFFFFFF);
+                drawTextSafe(gge, font, (tabPage + 1) + "/" + totalPages,
+                    leftX - 2, arrowY + ARROW_H + 2, 0xFFFFFF55);
+            }
+        } catch (Throwable t) {
+            if ((diagCounter++ & 63) == 0) {
+                System.err.println("[Mirage] 绘制翻页控件失败: " + t);
+            }
+        }
+    }
+
+    /**
+     * 检测翻页按钮点击（鼠标绝对坐标）。
+     * ASM 在 mouseClicked / mouseReleased 开头调用。
+     * @return true 如果点击被翻页按钮消费
+     */
+    public static boolean handlePageClick(double absX, double absY, int leftPos, int topPos,
+                                          int imageWidth, int imageHeight) {
+        if (totalPages <= 1) return false;
+        int arrowY = topPos - 28; // 绝对 y
+        int leftX = leftPos - ARROW_W - 2;
+        int rightX = leftPos + imageWidth + 2;
+        // 左箭头
+        if (absX >= leftX && absX <= leftX + ARROW_W && absY >= arrowY && absY <= arrowY + ARROW_H) {
+            flipPage(-1);
+            return true;
+        }
+        // 右箭头
+        if (absX >= rightX && absX <= rightX + ARROW_W && absY >= arrowY && absY <= arrowY + ARROW_H) {
+            flipPage(1);
+            return true;
+        }
+        return false;
+    }
+
     private MirageDebug() {}
 }
