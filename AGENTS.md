@@ -158,6 +158,7 @@ mirage-loader/
    * （注：本工程目前无 `src/test/`，回归靠 `gradle build` + `scripts/verify_*.ps1` + 启动冒烟。）
 4. **基线确认（仅本轮改核心敏感区时）**：如果本轮要改的文件本身在 `launcher/`、`core/mirage-loader/`、`core/mirage-mixin/`、`core/mirage-eventbus/`、`api/` 或 `modules/*/` 的类加载/Mixin/描述符解析/事件总线/entrypoint 路径上，**先跑一次** `gradle build` 确认编译过，再开新改动。
    * **不看"上一轮动了什么"**——只看本轮自己要改的文件。改文档/改注释不需要 build。
+   * **改了 mixin 类/mirage.mixins.json 后冒烟时**：不能只看"mixin 配置加载成功"就认为修好了。必须 grep `..\logs\latest.log` 确认测试 mixin 里的标记字符串（如 `@Inject 已生效`）真的出现了——配置加载成功 ≠ 注入真正生效（详见技术注意事项第 7 节）。
 5. **反查已知 bug（提交前）**：提交前翻一遍 `docs/已知bug.md`，看本轮改动是否命中了其中任何一条的根因；如果是，**划掉那条**并在更新日志里注明"连带修复了 xxx"。
 6. **文件硬锁（可选）**：仅当明确知道另一个会话/脚本正在改同一文件时，才用 `scripts/flock.ps1` 加硬锁。单会话、`flock.ps1 status` 显示无活动锁时跳过。
 
@@ -233,6 +234,7 @@ mirage-loader/
 
 * 一轮改动完成、`gradle build` 通过（代码改动时）、冒烟确认后，**立即** `git add` 本轮相关文件并 `git commit`，提交信息用 conventional 风格（`feat:` / `fix:` / `chore:` / `docs:` / `refactor:` 前缀），一句话讲清做了什么。
 * **只 add 本轮自己改的文件**，不要 `git add -A`。提交前 `git status` 确认暂存区里没有 `build/`、`.gradle/`、`logs/`、`local.properties` 等不该进库的路径。
+* **改了 mixin 类 / `mirage.mixins.json` 后，部署到 fat jar 前必须核对**：`jar tf <fat-jar>` 列出 jar 内所有 mixin class，和 `mirage.mixins.json` 里注册的类名一一对应。`defaultRequire: 0` 会让缺失 mixin 静默跳过不报错，不核对就是"配置加载成功但注入没生效"的幽灵 bug（详见技术注意事项第 2 节）。
 * 不要把多轮不相关的改动攒成一个提交。
 * commit 后**立即 `git push`**，不要在本地堆积多个未推送的 commit。
 * 提交后在 `docs/更新日志.md` 顶部追加对应条目（若适用），并把 `docs/改动登记表.md` 里本轮行从"进行中"移到"已完成"补上 commit 哈希（流程见规则 2.1）。
