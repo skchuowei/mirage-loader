@@ -330,3 +330,23 @@ mirage-loader/
   ```
 - `-p` 显示 private/protected 成员。26.x 无混淆，字段名方法名就是源码里的名字，可以直接对照。
 
+### 7. "Mixin 配置加载成功" ≠ "注入真正生效"
+
+- **历史教训**：之前多轮调试只验证了 `mirage.mixins.json` 能被解析、mixin 类能加载，但没有验证 `@Inject` 真的被织入目标方法。结果测试 mixin 里的标记打印语句一次都没出现过——整套 Mixin 管线实际上是失效的。
+- **正确验证方法**：在测试 mixin 的 `@Inject` 方法里放一个唯一标记字符串（如 `[Mirage-Mixin] @Inject 已生效`），启动后**全局 grep 日志**确认它出现了。只看到 `Mixin transformer xxx from mirage.mixins.json` 是不够的——那只说明 Mixin 在处理这个类，不代表注入点找到了、代码被织入了。
+- 如果日志里只有"配置加载成功"但标记字符串永远不出现，先怀疑整套管线没通，不要直接去调注入点写法。
+
+### 8. MixinTransformerError 诊断：catch 里必须打完整堆栈
+
+- `MixinTransformerError` 是 Mixin 在字节码转换阶段抛出的致命异常，消息 `"An unexpected critical error was encountered"` 是 Mixin 源码里的包装，真正根因在 `getCause()` 里。
+- **错误做法**：`System.err.println("转换失败: " + th)`——只打 `th.toString()`，丢掉整个 cause 链和 stack trace，根因完全看不到。
+- **正确做法**：在 `MirageMixinBootstrap.transform` 的 catch 块里必须 `th.printStackTrace()`，下次启动才能拿到完整调用栈。
+- 改 catch 块加堆栈打印是定位 Mixin 问题的**第一步**，不要在没堆栈的情况下猜原因。
+
+### 9. 自研 ASM Transformer 与 Mixin 的转换顺序冲突
+
+- `MirageClassLoader` 里 transformer 链的执行顺序很关键：如果 `MirageTransformer`（自研 ASM）先改写了 MC 类字节码（比如加了 `visitCode` 里的打印语句），再交给 `MirageMixinBootstrap.transform` 处理，Mixin 拿到的是被 ASM 改过的字节码。
+- ASM 改写后如果没用 `COMPUTE_FRAMES` 重算栈映射帧，或者破坏了 LineNumberTable / LocalVariableTable 等调试信息，Mixin 在处理时可能抛 `MixinTransformerError`。
+- **调试顺序问题时**：先读 `MirageClassLoader` 源码，确认 transformer 链的注册顺序和执行顺序——谁先谁后。当前已知 `SharedConstants` 这个类在 ASM 注入后交给 Mixin 时转换失败，是顺序冲突的典型案例。
+- 结论：自研 ASM 改造过的类，不要同时让 Mixin 再改——两条路径对同一个 MC 类二选一，不要叠加。
+
