@@ -350,3 +350,41 @@ mirage-loader/
 - **调试顺序问题时**：先读 `MirageClassLoader` 源码，确认 transformer 链的注册顺序和执行顺序——谁先谁后。当前已知 `SharedConstants` 这个类在 ASM 注入后交给 Mixin 时转换失败，是顺序冲突的典型案例。
 - 结论：自研 ASM 改造过的类，不要同时让 Mixin 再改——两条路径对同一个 MC 类二选一，不要叠加。
 
+### 10. Mixin 访问目标类 protected 成员：必须用 `@Shadow`，不是继承
+
+- **经典大坑**：写 `@Mixin(CreativeModeInventoryScreen.class) public abstract class X extends AbstractContainerScreen<Menu>`，然后在 mixin 里直接 `this.leftPos`——**javac 编译阶段就报错**。
+- 原因：mixin 类和目标类不在同一个包，`leftPos` 是 `AbstractContainerScreen` 的 protected 字段。Java 规则下，子类只能访问自己实例继承来的 protected 成员，mixin 编译期的 `this` 语义 ≠ 运行时注入后的 `this`。
+- **正确写法**：`@Shadow protected int leftPos;`（标准做法，不需要继承目标类）。网上流传的"mixin 继承父类就能访问 protected 字段"是半对：调 `super.xxx()` 可以，字段访问不行。
+- 如果之前某个 mixin 类"编译通过了"，检查一下是不是编译 classpath 里放了 stub 桩类、桩类把字段改成了 public——那不是语法合法，是桩类骗过去了编译器。
+
+### 11. `@Redirect` / `@ModifyExpressionValue` 不能假设调用链
+
+- **坑**：以为 `@Redirect(method="getTabX", at=@At(value="INVOKE", target="...column()"))` 就能屏蔽所有分页相关逻辑——**前提是 `checkTabClicked` / `checkTabHovering` 一定调用 `getTabX(tab)`**。
+- 这是需要 `javap -c` 反编译字节码确认的事实，不能预设。如果点击判定直接调 `tab.column()` 绕过 `getTabX`，@Redirect 拦不住——标签画在屏幕外，但点击坐标仍然命中隐藏标签，造成点击穿透 bug。
+- **结论**：写 `@Redirect` 前先反编译目标方法，确认所有调用路径都经过你要拦截的那行字节码；漏一条就是功能性 bug。
+
+### 12. `@Invoker` / `@Accessor` 签名严格匹配，写错静默失败
+
+- `@Invoker("selectTab") static void mirage$selectTab(CreativeModeTab tab)`——方法名+描述符必须和目标类的方法**严格一致**，没有重载推断。
+- 签名写错不会报错，Mixin 只是跳过这个注入点，表现和"没写这个 invoker"一样。
+- `@Invoker` 对 static 方法同样适用，但注意：如果目标 static 方法内部修改 static 字段，你同时用 `@Mutable @Accessor` 读写同一个字段，两者并发修改没有保护，会状态撕裂。
+
+### 13. ASM 版本校验发生在 ClassReader，不是 ClassWriter
+
+- **误区**：以为 Mixin 内部 shaded ASM 在写出字节码时会校验 class major version 并拒绝 v69（Java 25）。
+- **事实**：`Unsupported class file major version` 只发生在 `ClassReader` 解析原始 class 字节数组时。一旦用 `ClassReader` 读成 `ClassNode` 了，后续 `ClassWriter` 输出不再校验版本号。
+- SpongePowered Mixin 0.15.3 内嵌 shaded ASM 就是 ASM 9.9，和外部 ASM 版本一致。所以"SharedConstants 转换失败是因为 ASM 版本不兼容"这个猜想方向是错的。
+- `MixinEnvironment.getMaxCompatibilityLevel()` 也**不校验**目标类的 class 版本——它只控制 mixin 代码本身能用哪些 Java 语法特性（record、pattern matching 等），不要拿它当排障方向。
+
+### 14. Mixin helper 类必须被 MirageClassLoader 加载
+
+- 在 mixin 字节码里调用 helper 方法（比如 `MirageDebug.xxx()`），前提是这个 helper 类能被 `MirageClassLoader` 找到。
+- 不要默认"类在 fat jar 里就一定能被 mcl 加载"——mixin 类是由 `MirageMixinService` 特殊加载的，普通 helper 类需要 mcl 的 URL classpath 里包含 fat jar 才行。
+- 如果 helper 类放错模块（比如放 `mirage-mixin` 但没被加到 mcl 搜索路径），运行时直接 `NoClassDefFoundError`。
+
+### 15. 分页/列表类 UI 逻辑注意事项
+
+- **快照问题**：标签列表/注册表内容是动态变化的（mod 动态注册），如果分页列表只在 `init()` 算一次快照，后续新加的标签永远进不了分页——需要在标签列表变化时重建分页数据。
+- **离页元素渲染**：隐藏在屏幕外的 tab 如果还在 `extractTabButton(selectedTab)` 里走完整 blit，虽然视觉看不见，但 GPU 仍在做无效绘制——离页元素应直接 return，不要走完整渲染。
+- **全局翻页 UX**：TOP/BOTTOM 行数不同时，总页数取 max，短的那行翻页时会留白——这是设计选择，但要明确这是全局翻页不是单行翻页。
+
