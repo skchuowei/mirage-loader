@@ -3,6 +3,8 @@
 > 日期：2026-10-17
 > 范围：`core/mirage-loader` 运行时发现管线，MID 磁盘缓存第一步（`2026-10-17-mid-cache.md`）的下游扩展
 > 前置：本计划只做设计文档，不写 Java 代码；实施要等 MID 缓存第一步落地 + 工作区另一会话 WIP 提交后再开。
+>
+> **注意（2026-10-18补充）**：MC 26.2原版CreativeModeInventoryScreen本身已经内置了完整的多标签分页/翻页按钮逻辑，不需要我们自己实现分页。沙盒阶段要自然观察原版分页按钮的触发条件、分页流程，不要自己重复造分页逻辑。
 
 ## 目标
 
@@ -173,6 +175,13 @@ public static class Recorded {
 5. **开关验证**：
    - bat 命令行加 `--sandbox-record=off`，启动一次，日志里**没有**沙盒录制行；
    - 加 `--sandbox-record=force`，启动一次，无视缓存重录。
+
+## 沙盒阶段附加观察项（2026-10-18补充）
+跑通NeoForge mod沙盒之后，附加观察创造模式标签页分页机制：
+1. 验证原版26.2本身是否内置多标签分页：逐行看`CreativeModeInventoryScreen.init()`里有没有翻页按钮、currentPage字段；
+2. 重点观察NeoForge的分页实现：它是在init()里加翻页按钮、自己维护visibleTabs列表、用页内column算x坐标；
+3. 记录Fabric的实现方式：它用`@Accessor @Mutable` Mixin直接改写CreativeModeTab的column/row final字段，让原版getTabX自然拿到页内列号，不需要运行时反射；
+4. 后续我们自己实现分页优先参考Fabric路线：在init()阶段（游戏已完全启动，不会触发bootstrap）一次性用Accessor改写tab的页内列号，彻底避免`Not bootstrapped`反射异常。
 
 ## 回滚方案
 

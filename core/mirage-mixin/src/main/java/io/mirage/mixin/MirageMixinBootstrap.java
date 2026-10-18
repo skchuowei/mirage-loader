@@ -73,7 +73,10 @@ public final class MirageMixinBootstrap {
             }
             return result;
         } catch (Throwable th) {
+            // 必须打印完整堆栈：Mixin 抛出的是包装异常（"An unexpected critical error..."），
+            // 根因在 cause 链里，只打 th.toString() 会丢失现场（见 AGENTS.md §8）。
             System.err.println("[Mirage-Mixin] 转换 " + name + " 失败: " + th);
+            th.printStackTrace();
             return basicClass;
         }
     }

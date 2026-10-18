@@ -4,8 +4,10 @@
   "mixins": [
     "MirageTestMixin"
   ],
-  "client": [],
+  "client": [
+    "CreativeModeInventoryScreenMixin"
+  ],
   "injectors": {
-    "defaultRequire": 0
+    "defaultRequire": 1
   }
 }

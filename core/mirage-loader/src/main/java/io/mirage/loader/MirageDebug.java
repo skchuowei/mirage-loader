@@ -74,7 +74,10 @@ public final class MirageDebug {
             for (String modId : modNamespaces) {
                 try {
                     java.nio.file.Path modJar = findModJar(modId);
-                    if (modJar == null) continue;
+                    if (modJar == null) {
+                        System.out.println("[Mirage] 跳过 mod 资源（mods 目录里没有该命名空间的 jar）: " + modId);
+                        continue;
+                    }
                     java.nio.file.Path extractDir = java.nio.file.Files.createTempDirectory("mirage-" + modId);
                     extractAssets(modJar, extractDir);
                     java.nio.file.Path assetRoot = extractDir.resolve("assets");
@@ -82,6 +85,8 @@ public final class MirageDebug {
                         if (pushRoot != null) pushRoot.invoke(builder, extractDir);
                         if (pushPath != null) pushPath.invoke(builder, clientResources, assetRoot);
                         System.out.println("[Mirage] 已添加 mod 资源: " + modId + " -> " + extractDir);
+                    } else {
+                        System.out.println("[Mirage] 跳过 mod 资源（jar 内没有 assets 目录）: " + modId);
                     }
                 } catch (Exception e) {
                     System.err.println("[Mirage] 添加失败: " + modId + ": " + e);
@@ -92,17 +97,48 @@ public final class MirageDebug {
         }
     }
 
+    /**
+     * assets 命名空间 -> mod jar 的映射。
+     * 按 jar 内实际存在的 assets/&lt;命名空间&gt;/ 反查，不依赖 jar 文件名
+     * （旧实现用大小写敏感的文件名前缀匹配，导致 ExpOre-*.jar 这类文件名
+     * 与 mod id "expore" 对不上，资源被静默跳过、方块/物品无模型贴图）。
+     */
+    private static final java.util.Map<String, java.nio.file.Path> ASSET_PACKS
+            = new java.util.concurrent.ConcurrentHashMap<>();
+
     private static java.nio.file.Path findModJar(String modId) {
+        scanAssetNamespaces();
+        java.nio.file.Path p = ASSET_PACKS.get(modId);
+        if (p != null && java.nio.file.Files.exists(p)) return p;
+        return null;
+    }
+
+    /** 扫描 mods 目录下所有 jar，登记「assets/&lt;命名空间&gt; -> jar」，只需扫一次。 */
+    private static void scanAssetNamespaces() {
+        if (!ASSET_PACKS.isEmpty()) return;
         try {
             java.nio.file.Path modsDir = java.nio.file.Path.of(System.getProperty("user.dir")).resolve("mods");
-            if (!java.nio.file.Files.exists(modsDir)) return null;
+            if (!java.nio.file.Files.exists(modsDir)) return;
             try (var stream = java.nio.file.Files.list(modsDir)) {
                 for (java.nio.file.Path p : (Iterable<java.nio.file.Path>) stream::iterator) {
-                    if (p.getFileName().toString().startsWith(modId + "-")) return p;
+                    if (!p.getFileName().toString().endsWith(".jar")) continue;
+                    try (java.util.zip.ZipFile zf = new java.util.zip.ZipFile(p.toFile())) {
+                        java.util.Enumeration<? extends java.util.zip.ZipEntry> entries = zf.entries();
+                        while (entries.hasMoreElements()) {
+                            String name = entries.nextElement().getName();
+                            if (!name.startsWith("assets/")) continue;
+                            int slash = name.indexOf('/', "assets/".length());
+                            if (slash < 0) continue;
+                            String ns = name.substring("assets/".length(), slash);
+                            if (!ns.isEmpty()) ASSET_PACKS.putIfAbsent(ns, p);
+                        }
+                    }
                 }
             }
-        } catch (Exception e) {}
-        return null;
+            System.out.println("[Mirage] 扫描 assets 命名空间: " + ASSET_PACKS.keySet());
+        } catch (Exception e) {
+            System.err.println("[Mirage] 扫描 assets 命名空间失败: " + e);
+        }
     }
 
     private static void extractAssets(java.nio.file.Path jar, java.nio.file.Path dest) throws Exception {
@@ -256,29 +292,26 @@ public final class MirageDebug {
     private static void ensureTabReflect() {
         if (tabReflectReady) return;
         try {
-            Class<?> cTabs = Class.forName("net.minecraft.world.item.CreativeModeTabs");
+            ClassLoader cl = MirageDebug.class.getClassLoader();
+            // 关键：Class.forName第二个参数initialize=false，只加载类元数据，不触发静态初始化链，避免提前触发BuiltInRegistries的bootstrap检查
+            Class<?> cTabs = Class.forName("net.minecraft.world.item.CreativeModeTabs", false, cl);
             m_tabs = cTabs.getMethod("tabs");
             m_tabs.setAccessible(true);
-            Class<?> cTab = Class.forName("net.minecraft.world.item.CreativeModeTab");
-            // 直接读字段，不调用getter方法，绕开26.2里getter内部的bootstrap检查
+            Class<?> cTab = Class.forName("net.minecraft.world.item.CreativeModeTab", false, cl);
+            // 直接读字段，不调用getter方法
             f_tabColumn = cTab.getDeclaredField("column");
             f_tabColumn.setAccessible(true);
             f_tabRow = cTab.getDeclaredField("row");
             f_tabRow.setAccessible(true);
             f_tabType = cTab.getDeclaredField("type");
             f_tabType.setAccessible(true);
-            Class<?> cRow = Class.forName("net.minecraft.world.item.CreativeModeTab$Row");
-            rowTop = Enum.valueOf(cRow.asSubclass(Enum.class), "TOP");
-            rowBottom = Enum.valueOf(cRow.asSubclass(Enum.class), "BOTTOM");
-            Class<?> cType = Class.forName("net.minecraft.world.item.CreativeModeTab$Type");
-            typeSearch = Enum.valueOf(cType.asSubclass(Enum.class), "SEARCH");
+            // 枚举初始化延后到真正需要的时候再做，避免提前触发静态块
             tabReflectReady = true;
-            System.out.println("[Mirage] 标签页反射就绪（直接读字段）");
+            System.out.println("[Mirage] 标签页反射就绪（延迟初始化，不触发静态块）");
         } catch (Throwable t) {
-            System.err.println("[Mirage] 标签页反射初始化失败，完整栈: " + t);
-            t.printStackTrace();
+            System.err.println("[Mirage] 标签页反射初始化失败，直接回退单页: " + t);
             tabReflectReady = false;
-            totalPages = 1; // 反射失败时不启用分页，不画翻页按钮
+            totalPages = 1; // 反射失败时彻底关闭分页，不画翻页按钮，不干预原版逻辑
         }
     }
 
@@ -288,6 +321,15 @@ public final class MirageDebug {
         ensureTabReflect();
         if (!tabReflectReady) return;
         try {
+            // 懒加载枚举值
+            if (rowTop == null) {
+                ClassLoader cl = MirageDebug.class.getClassLoader();
+                Class<?> cRow = Class.forName("net.minecraft.world.item.CreativeModeTab$Row", false, cl);
+                rowTop = Enum.valueOf(cRow.asSubclass(Enum.class), "TOP");
+                rowBottom = Enum.valueOf(cRow.asSubclass(Enum.class), "BOTTOM");
+                Class<?> cType = Class.forName("net.minecraft.world.item.CreativeModeTab$Type", false, cl);
+                typeSearch = Enum.valueOf(cType.asSubclass(Enum.class), "SEARCH");
+            }
             java.util.List<Object> all = (java.util.List<Object>) m_tabs.invoke(null);
             int maxCol = 0;
             for (Object tab : all) {
@@ -303,9 +345,8 @@ public final class MirageDebug {
             totalPages = Math.max(1, (maxCol + TABS_PER_PAGE) / TABS_PER_PAGE);
             System.out.println("[Mirage] 重建标签页: 最大列=" + maxCol + " totalPages=" + totalPages);
         } catch (Throwable t) {
-            System.err.println("[Mirage] 重建标签页失败: " + t);
-            if (t.getCause() != null) t.getCause().printStackTrace();
-            totalPages = 2; // 兜底至少 2 页
+            System.err.println("[Mirage] 重建标签页失败，回退单页: " + t);
+            totalPages = 1; // 失败时彻底关闭分页，不要强制2页
         }
     }
 
@@ -315,16 +356,16 @@ public final class MirageDebug {
      * @return 0..6 表示显示列；-1 表示该 tab 不在当前页（应隐藏/离屏）
      */
     public static int getDisplayColumn(Object tab) {
-        if (tab == null) return 0;
+        if (tab == null || totalPages <= 1) return 0; // 单页模式下完全不干预原版逻辑
         ensureTabReflect();
-        if (!tabReflectReady) return 0; // 反射完全没初始化成功时：不做分页、不隐藏任何标签，返回0正常显示
+        if (!tabReflectReady) return 0;
         try {
             int col = f_tabColumn.getInt(tab);
             int displayCol = col - tabPage * TABS_PER_PAGE;
-            if (displayCol < 0 || displayCol >= TABS_PER_PAGE) return -1; // 明确算出来不在当前页，才标记为不可见
+            if (displayCol < 0 || displayCol >= TABS_PER_PAGE) return -1;
             return displayCol;
         } catch (Throwable t) {
-            return 0; // 单个tab反射失败时：默认它在当前页正常显示，不隐藏，避免反射抖动导致所有标签消失
+            return 0; // 单个tab反射失败时默认在当前页正常显示，不隐藏
         }
     }
 
