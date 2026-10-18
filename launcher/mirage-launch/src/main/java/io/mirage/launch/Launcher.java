@@ -199,6 +199,7 @@ public final class Launcher {
                 Object reg = switch (regName) {
                     case "item" -> itemReg;
                     case "block" -> blockReg;
+                    case "creativemodetab" -> tabReg;
                     default -> null;
                 };
                 if (reg == null) {
@@ -325,8 +326,8 @@ public final class Launcher {
             // NeoForge 生命周期事件桥接：mod 已全部构造、注册闭环完成，
             // 向 mod bus post FMLConstructModEvent / FMLCommonSetupEvent，
             // 让 NeoForge mod 的 @SubscribeEvent 方法真正触发。
-            postNeoLifecycle("net.neoforged.fml.event.lifecycle.FMLConstructModEvent");
-            postNeoLifecycle("net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent");
+            postNeoLifecycle("net.neoforged.fml.event.lifecycle.FMLConstructModEvent", mcl);
+            postNeoLifecycle("net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent", mcl);
 
             // 所有 mod 完成 onInitialize 后，再广播一轮 ModPostInitEvent
             // （语义：此时可以安全读取其他 mod 注册的内容）
@@ -449,7 +450,7 @@ public final class Launcher {
             // 此时可注册 Screen / HUD / 按键绑定。
             System.out.println("[Mirage] 派发 ClientStartingEvent ...");
             eventBus.post(new ClientStartingEvent());
-            postNeoLifecycle("net.neoforged.fml.event.lifecycle.FMLClientSetupEvent");
+            postNeoLifecycle("net.neoforged.fml.event.lifecycle.FMLClientSetupEvent", mcl);
 
             main.invoke(null, (Object) args);
 
@@ -521,9 +522,11 @@ public final class Launcher {
      * 向 NeoForge mod bus post 一个生命周期事件（反射，避免 launch 模块硬依赖 net.neoforged.*）。
      * 无 NeoForge mod / stub 缺失时仅打印，不影响主流程。
      */
-    private static void postNeoLifecycle(String eventClassName) {
+    private static void postNeoLifecycle(String eventClassName, ClassLoader neoLoader) {
         try {
-            ClassLoader cl = Launcher.class.getClassLoader();
+            // net.neoforged.* stub 现在由 MirageClassLoader 加载（与 mod 同 loader），
+            // 不能用 SystemClassLoader，否则拿到另一份 Class 对象，post 不到 mod 注册的监听器。
+            ClassLoader cl = neoLoader;
             Object ctx = Class.forName("net.neoforged.fml.javafmlmod.FMLJavaModLoadingContext", true, cl)
                     .getMethod("get").invoke(null);
             Object bus = ctx.getClass().getMethod("getModEventBus").invoke(ctx);

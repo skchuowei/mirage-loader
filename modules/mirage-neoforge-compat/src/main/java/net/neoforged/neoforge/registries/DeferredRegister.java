@@ -40,14 +40,21 @@ import java.util.function.Supplier;
  */
 public class DeferredRegister<T> {
 
-    private final ResourceKey<? extends Registry<T>> registryKey;
-    private final String modId;
+    protected final ResourceKey<? extends Registry<T>> registryKey;
+    protected final String modId;
+    /** 由 createBlocks/createItems 便捷工厂直接指定注册表路径，绕开编译期无 MC Registry 常量。 */
+    private final String fixedPath;
     private final List<RegisteredEntry<?>> entries = new ArrayList<>();
     private io.mirage.api.registry.DeferredRegister<T> bridge;
 
     private DeferredRegister(ResourceKey<? extends Registry<T>> registryKey, String modId) {
+        this(registryKey, modId, null);
+    }
+
+    private DeferredRegister(ResourceKey<? extends Registry<T>> registryKey, String modId, String fixedPath) {
         this.registryKey = registryKey;
         this.modId = modId;
+        this.fixedPath = fixedPath;
     }
 
     // ---------------------------------------------------------------
@@ -62,16 +69,55 @@ public class DeferredRegister<T> {
         return new DeferredRegister<>(key, namespace);
     }
 
+    /**
+     * NeoForge 26.x 便捷工厂：{@code DeferredRegister.createBlocks(modId)}。
+     * 返回 {@link Blocks} 子类，JVM 链接时期望返回类型 {@code DeferredRegister$Blocks}。
+     */
+    public static Blocks createBlocks(String modId) {
+        return new Blocks(modId);
+    }
+
+    /** NeoForge 26.x 便捷工厂：{@code DeferredRegister.createItems(modId)}。 */
+    public static Items createItems(String modId) {
+        return new Items(modId);
+    }
+
+    /** NeoForge 26.x 新增：方块专用 DeferredRegister 子类型。泛型擦除为 Object，运行时签名占位。 */
+    public static final class Blocks extends DeferredRegister<Object> {
+        private Blocks(String modId) { super(null, modId, "block"); }
+
+        /** 协变返回 DeferredBlock，匹配 NeoForge 26.x 编译期签名。 */
+        public <I> DeferredBlock<I> register(String name, Supplier<I> supplier) {
+            super.register(name, supplier);
+            return new DeferredBlock<>(name, modId, supplier);
+        }
+    }
+
+    /** NeoForge 26.x 新增：物品专用 DeferredRegister 子类型。 */
+    public static final class Items extends DeferredRegister<Object> {
+        private Items(String modId) { super(null, modId, "item"); }
+
+        public <I> DeferredItem<I> register(String name, Supplier<I> supplier) {
+            super.register(name, supplier);
+            return new DeferredItem<>(name, modId, supplier);
+        }
+    }
+
     // ---------------------------------------------------------------
     // 条目声明
     // ---------------------------------------------------------------
 
-    public <I extends T> RegistryObject<I> register(String name, Supplier<I> supplier) {
+    public <I extends T> DeferredHolder<I> register(String name, Supplier<I> supplier) {
+        // 兼容 mod 动态注册时序（如 ModBlocks.registerBlockItem 在 ModItems.ITEMS 已挂总线后
+        // 再追加 BlockItem）：bridge 已存在时直接 forward，不抛异常。
         if (bridge != null) {
-            throw new IllegalStateException("DeferredRegister (mod=" + modId
-                    + ") 已 register(bus)，不能再声明新条目: " + name);
+            @SuppressWarnings("unchecked")
+            io.mirage.api.registry.DeferredRegister<I> b =
+                    (io.mirage.api.registry.DeferredRegister<I>) bridge;
+            b.register(name, supplier);
+            return new DeferredHolder<>(name, modId, supplier);
         }
-        RegistryObject<I> holder = new RegistryObject<>(name, modId, supplier);
+        DeferredHolder<I> holder = new DeferredHolder<>(name, modId, supplier);
         entries.add(new RegisteredEntry<>(name, supplier, holder));
         return holder;
     }
@@ -101,14 +147,23 @@ public class DeferredRegister<T> {
                 + " 桥接 " + entries.size() + " 个条目到 MG DeferredRegister");
     }
 
-    /** registryKey.location().getPath()；镜像返回 null 时安全兜底。 */
+    /** registryKey 类型识别：26.x 起 ResourceKey.location() 已移除，直接从 toString() 解析。 */
     private String resolveRegistryPath() {
-        try {
-            Identifier loc = registryKey.location();
-            return loc == null ? "" : loc.getPath();
-        } catch (Throwable t) {
-            return "";
+        if (fixedPath != null) return fixedPath;
+        // ResourceKey.toString() 形如 "ResourceKey[minecraft:root / minecraft:item]"
+        // 斜杠后才是真正的注册表 ID "minecraft:item"
+        String s = String.valueOf(registryKey);
+        int slash = s.indexOf('/');
+        if (slash >= 0) {
+            String after = s.substring(slash + 1).trim();
+            int close = after.indexOf(']');
+            if (close > 0) after = after.substring(0, close).trim();
+            int colon = after.indexOf(':');
+            if (colon >= 0) after = after.substring(colon + 1);
+            System.out.println("[Mirage:NeoDBG] modId=" + modId + " parsed registry path=" + after + " from " + s);
+            return after;
         }
+        return "";
     }
 
     /**
@@ -120,6 +175,7 @@ public class DeferredRegister<T> {
         String cn = switch (registryPath) {
             case "item" -> "net.minecraft.world.item.Item";
             case "block" -> "net.minecraft.world.level.block.Block";
+            case "creative_mode_tab" -> "net.minecraft.world.item.CreativeModeTab";
             default -> null;
         };
         if (cn == null) {

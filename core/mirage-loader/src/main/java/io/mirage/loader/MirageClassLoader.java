@@ -36,8 +36,11 @@ public class MirageClassLoader extends URLClassLoader {
 
     @Override
     protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
-        // io.mirage.* 强制走 SystemClassLoader，保证 Launcher 和 MC 渲染线程看到同一个类
-        if (name.startsWith("io.mirage.")) {
+        // io.mirage.* 强制走 SystemClassLoader，保证 Launcher 和 MC 渲染线程看到同一个类。
+        // 例外：io.mirage.neoforge.* 是 NeoForge 兼容层运行时实现（NeoEventBusImpl 等），
+        // 必须和 mod 侧用同一个 MirageClassLoader 加载，否则它引用的 net.minecraft.* 类
+        // 会出现"app loader 与 MirageClassLoader 各加载一份"的 loader constraint violation。
+        if (name.startsWith("io.mirage.") && !name.startsWith("io.mirage.neoforge.")) {
             return ClassLoader.getSystemClassLoader().loadClass(name);
         }
         // java.*/javax.*/jdk.* 走 parent
@@ -45,8 +48,13 @@ public class MirageClassLoader extends URLClassLoader {
                 || name.startsWith("javax.") || name.startsWith("jdk.")) {
             return super.loadClass(name, resolve);
         }
-        // net.minecraft.* 走我们的 findClass（带 transform）
-        if (name.startsWith("net.minecraft.")) {
+        // net.minecraft.* / net.neoforged.* / io.mirage.neoforge.* 走 findClass（MirageClassLoader
+        // 自己加载）：NeoForge stub（IEventBus / DeferredRegister / FML*）必须与 mod 引用同 loader，
+        // 否则 DeferredRegister 里 Class.forName(net.minecraft...) 拿到 app loader 版本，与 mod 侧
+        // MirageClassLoader 版本形成两份 ResourceKey/Block/Item，触发 LinkageError。
+        if (name.startsWith("net.minecraft.")
+                || name.startsWith("net.neoforged.")
+                || name.startsWith("io.mirage.neoforge.")) {
             synchronized (getClassLoadingLock(name)) {
                 Class<?> c = findLoadedClass(name);
                 if (c == null) {

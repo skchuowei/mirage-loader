@@ -71,10 +71,9 @@ public final class DeferredRegister<T> {
      * 其 {@link RegistryObject#get()} 在注册完成前不可用。
      */
     public RegistryObject<T> register(String name, Supplier<T> supplier) {
-        if (hooked) {
-            throw new IllegalStateException("DeferredRegister<" + type.getSimpleName()
-                    + "> (mod=" + modId + ") 已挂到事件总线，不能再注册新条目");
-        }
+        // NeoForge 兼容：register(bus) 后仍允许动态追加条目（如 ModBlocks.registerBlockItem
+        // 在 ModItems.ITEMS 已挂总线后追加 BlockItem）。flush 在所有 mod 构造完之后统一跑，
+        // 此时追加的条目仍会被 flush 看到。
         RegistryKey<T> key = RegistryKey.create(type.getSimpleName().toLowerCase(), modId, name);
         RegistryObject<T> holder = new RegistryObject<>(key);
         entries.add(new Entry<>(name, supplier, holder));
