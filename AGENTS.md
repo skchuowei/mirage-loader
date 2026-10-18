@@ -121,9 +121,9 @@ mirage-loader/
 以下规则对每次会话、每次改动都生效，不得跳过。
 （本规则由原锋语项目流程改造而来，路径与术语已对齐 Mirage Loader 现状。）
 
-### 规则 0 · 新会话/子 agent 开工前必须先读本文件（前置门槛，最优先级）
+### 规则 0 · 新会话开工前必读四份文件（前置门槛，最优先级）
 
-**任何** agent——包括主 agent、被主 agent 派下去的子 agent、被另一个会话独立拉起的执行体——在对本仓库做任何写操作（改代码、下文件、挪 mod、建目录、git commit）之前，**必须**按顺序完成：
+**任何**执行体在对本仓库做任何写操作（改代码、下文件、挪 mod、建目录、git commit）之前，**必须**按顺序完成：
 
 1. `Read` 本文件 `AGENTS.md` 全文；
 2. `Read` `docs/改动登记表.md` 全文（看"进行中"有没有别人的活）；
@@ -132,10 +132,7 @@ mirage-loader/
 
 **没读这四份文件就动手 = 违规**，事后在更新日志里复盘。
 
-主 agent 派子 agent 时的硬性义务：
-* 在 `create_agent` 的 `hint` 参数里**必须**显式写一句："开工前先 `Read` `D:\bing\MC\mcmoderr-my\mirage-loader\AGENTS.md` 全文，并按规则 2.1 在 `docs/改动登记表.md` 登记。"
-* 不要假设子 agent 会自己发现 AGENTS.md——它的工作目录、系统提示、历史上下文都可能不带这份文件。
-* 如果子 agent 回报的动作看起来绕过了规则（比如直接往 `mc-shili/mods/` 扔 jar、没登记就 commit、`git add -A`），主 agent 必须停下来追问，不要默认它懂。
+> 注：项目已从 9-agent 并行模式收敛为单人+AI 直接开发，不再有"主 agent 派子 agent"的调度结构。若未来恢复多 agent 派遣，再补充派遣时的 hint 约束。
 
 ### 规则 1 · 需求复核与补丁方案
 
@@ -146,37 +143,25 @@ mirage-loader/
 
 ### 规则 2 · 改动前的前置检查
 
-开始改任何代码/文档前，**必须按顺序**完成以下动作并在心里核对：
+开始改代码前，**必须**完成以下动作（纯文档/注释/文案改动见末尾豁免）：
 
 1. **查改动登记表 `docs/改动登记表.md`**：
 
    * 先看"进行中"列表：如果本轮要改的文件已有别人/上一轮未完成的改动在登记，**不要贸然改**，先报告用户，确认后再动手。
    * 确认无冲突后，**先登记**：在"进行中"表格加一行（日期、主题、涉及文件、状态=进行中），再开始改。
-   * 改完提交后，把这行从"进行中"移到"已完成"，补上 commit 哈希。
+   * **commit 哈希填写流程**：先 `git commit` 拿到哈希，再改登记表把这行从"进行中"移到"已完成"补上哈希，然后**单独一次小提交**或 `--amend` 收尾。**不要在 commit 前预填哈希**，也不要反复 amend（amend 会让哈希再变一次，死循环）。
 2. **`git status`**（在 `mirage-loader/` 下执行）看是否有未提交改动。
 
-   * 若工作区存在**不属于本轮任务**的未提交改动，先提示用户并询问如何处理（提交/暂存/保留）；不要在一堆混杂改动上叠新改动。
-   * 若是上一轮自己刚做完还没提交的，**先把上一轮改动提交掉**再开新改动。
-3. **阅读 `docs/已知bug.md`** 全文，确认本轮要改的文件/模块是否与已知 bug 相关，避免改出新问题或与未修复 bug 冲突。
-4. **阅读 `docs/更新日志.md` 顶部最新 1\~2 条**，了解上一版本刚做了什么、动过哪些文件、用什么方式验证的。
-5. **检查回归测试是否覆盖上次更新**：对照 `docs/更新日志.md` 最新条目里提到的新特性/修复点，确认是否已有对应 `src/test/` 用例或 mdk-example 冒烟步骤；**没有就先补**，不要在"上次改动根本没被回归覆盖"的基线上继续叠改动。
+   * 若工作区存在**不属于本轮任务**的未提交改动（比如上一轮 paging-fix 的 WIP），**不要碰它**：只 `git add` 本轮自己改的文件，不要替别人提交、不要 `git add -A`、不要 `git checkout .`。在提交信息或更新日志里注明"工作区另有 WIP 未一并提交"即可。
+   * 若是上一轮自己刚做完还没提交的同类改动，先把它提交掉再开新改动。
+3. **检查回归测试覆盖**：对照 `docs/更新日志.md` 最新条目提到的新特性/修复点，确认 mdk-example 或 `scripts/verify_*.ps1` 能复现上次改动点；没有就先补，不要在"上次改动没被覆盖"的基线上叠改动。
+   * （注：本工程目前无 `src/test/`，回归靠 `gradle build` + `scripts/verify_*.ps1` + 启动冒烟。）
+4. **基线确认（仅本轮改核心敏感区时）**：如果本轮要改的文件本身在 `launcher/`、`core/mirage-loader/`、`core/mirage-mixin/`、`core/mirage-eventbus/`、`api/` 或 `modules/*/` 的类加载/Mixin/描述符解析/事件总线/entrypoint 路径上，**先跑一次** `gradle build` 确认编译过，再开新改动。
+   * **不看"上一轮动了什么"**——只看本轮自己要改的文件。改文档/改注释不需要 build。
+5. **反查已知 bug（提交前）**：提交前翻一遍 `docs/已知bug.md`，看本轮改动是否命中了其中任何一条的根因；如果是，**划掉那条**并在更新日志里注明"连带修复了 xxx"。
+6. **文件硬锁（可选）**：仅当明确知道另一个会话/脚本正在改同一文件时，才用 `scripts/flock.ps1` 加硬锁。单会话、`flock.ps1 status` 显示无活动锁时跳过。
 
-   * （注：本工程目前 `src/test/` 尚未建立，本条现阶段等价于"确认 mdk-example 或手工冒烟步骤能复现上次改动点"；一旦 `src/test/` 建立，立即切换为用例驱动。）
-6. **基线确认（硬性）**：如果上一轮 commit 动过 `launcher/`、`core/mirage-loader/`、`core/mirage-mixin/`、`core/mirage-eventbus/`、`api/` 或 `modules/\*/` 的**类加载 / Mixin 织入 / Mod 描述符解析 / 事件总线 / entrypoint 引导**路径，本轮开始前**必须先跑一次** `gradle build` 并启动一次冒烟（`..\\启动 26.2-mirage.bat`），确认构建退出码 0、`..\\logs\\latest.log` 里 Mirage 加载链正常、MC 主类被反射调起，再开新改动。不要假设"上次应该修好了"——实测为准。
-7. **反查已知 bug（提交前）**：提交前翻一遍 `docs/已知bug.md`，看本轮改动是否命中了其中任何一条的根因；如果是，**划掉那条**并在更新日志里注明"连带修复了 xxx"，不要让已修的 bug 长期挂在已知 bug 列表里。
-8. **文件硬锁（多会话/多脚本并发时）**：当你可能与另一个会话、或与 `scripts/` 下的并发构建脚本同时改同一文件时，在软登记（第 1 条）之外**再加硬锁**：
-
-```powershell
-   $sid = (powershell -ExecutionPolicy Bypass -File .\\scripts\\flock.ps1 new).Trim()
-   powershell -ExecutionPolicy Bypass -File .\\scripts\\flock.ps1 lock $sid <相对仓库根的文件路径>
-   # ...改代码、构建、冒烟...
-   powershell -ExecutionPolicy Bypass -File .\\scripts\\flock.ps1 unlock $sid <同上>
-   powershell -ExecutionPolicy Bypass -File .\\scripts\\flock.ps1 logout $sid
-   ```
-
-   * 单会话、且 `flock.ps1 status` 显示无活动锁时，可以跳过硬锁，只做软登记。
-   * 改完/会话结束**必须 logout**，否则锁会在 1800 秒后被自动 reap（注释里看得到）。
-   * `docs/改动登记表.md` 里本轮行的"主题"后面附 `(sid=S001)` 便于追溯。
+**纯文档改动豁免**：本轮只改 `.md` / `.txt` / 注释 / 文案，不改任何 `.java` / `.kts` / `.gradle` / 构建脚本时，跳过第 3、4 项，其余照常。
 
 ### 规则 3 · 信息分文件存放，不要塞一起
 
@@ -242,21 +227,15 @@ mirage-loader/
 有没有 jar/文件级备份？回滚后按规则 6 写回退报告>
 ```
 
-**与旧七节骨架的差异**（2026-10-18 修订）：
-- 新增 **前置条件与阻塞项**：多会话并行项目里，这一节决定能不能立刻开干，不能再塞在现状分析里。
-- 新增 **合规边界**：兼容层计划的 LGPL 红线，必须显式声明。
-- **改动文件清单**强制分"要改 / 明确不做"两区块，防止范围蔓延。
-- 头部加 **关联** 行，指向上游计划/复盘文档。
-- 各节加注释明确分工，避免"回归测试影响面"和"验证步骤"重复。
-
 小改动（单文件、<50 行、纯文案/注释）可直接改，不必写计划。
 
-### 规则 5 · 每轮改动完成后必须提交
+### 规则 5 · 每轮改动完成后必须提交并推送
 
-* 一轮改动完成、`gradle build` 通过、冒烟确认后，**立即** `git add` 相关文件并 `git commit`，提交信息用 conventional 风格（`feat:` / `fix:` / `chore:` / `docs:` / `refactor:` 前缀），一句话讲清做了什么。
+* 一轮改动完成、`gradle build` 通过（代码改动时）、冒烟确认后，**立即** `git add` 本轮相关文件并 `git commit`，提交信息用 conventional 风格（`feat:` / `fix:` / `chore:` / `docs:` / `refactor:` 前缀），一句话讲清做了什么。
+* **只 add 本轮自己改的文件**，不要 `git add -A`。提交前 `git status` 确认暂存区里没有 `build/`、`.gradle/`、`logs/`、`local.properties` 等不该进库的路径。
 * 不要把多轮不相关的改动攒成一个提交。
-* 提交前确认：没有把 `build/`、`.gradle/`、`run/`、`local.properties`、`run-m3.log` 等产物/日志误加进去（参考 `.gitignore`）。
-* 提交后在 `docs/更新日志.md` 顶部追加对应条目（若适用），并把 `docs/改动登记表.md` 里本轮行从"进行中"移到"已完成"补上 commit 哈希。
+* commit 后**立即 `git push`**，不要在本地堆积多个未推送的 commit。
+* 提交后在 `docs/更新日志.md` 顶部追加对应条目（若适用），并把 `docs/改动登记表.md` 里本轮行从"进行中"移到"已完成"补上 commit 哈希（流程见规则 2.1）。
 
 ### 规则 6 · 回退代码必须写回退报告
 
@@ -275,24 +254,19 @@ mirage-loader/
 
 每次会话结束（或告一段落）前，**必须**做以下清理：
 
-1. **删除临时调试文件**（在仓库**外部** `D:\\bing\\MC\\mcmoderr-my\\` 根目录）：`.tmp\_build/`、`.tmp\_classes/`、`.tmp\_cls/`、`.tmp\_jarwork/`、`.tmp\_vpr2/`、`.tmp\_disasm.txt`、`.tmp\_screen\*.png`、`.tmp\_vpr.txt`、`崩溃\*.txt`、一次性复现脚本（确认无保留价值后删；拿不准的留着并说明）。
+1. **删除临时调试文件**（在仓库**外部** `D:\bing\MC\mcmoderr-my\` 根目录）：`.tmp\_build/`、`.tmp\_classes/`、`.tmp\_cls/`、`.tmp\_jarwork/`、`.tmp\_vpr2/`、`.tmp\_disasm.txt`、`.tmp\_screen\*.png`、`.tmp\_vpr.txt`、`崩溃\*.txt`、一次性复现脚本（确认无保留价值后删；拿不准的留着并说明）。
 2. **构建中间产物**：`mirage-loader/\*\*/build/`、`.gradle/`、根目录 `logs/` 里被新一次冒烟顶掉的旧日志——这些**不进 git**（已在 `.gitignore`），若对应样例已验证通过，下次构建前会被覆盖，不必手动删；但实验结束后不再对应的旧 `build/` 目录可清。
-3. **补全回归测试**：本轮新引入的特性 / 修过的 bug，若还没有对应的 `src/test/` 用例或 mdk-example 冒烟步骤，**当场补上**，不要把"待补测试"拖到下次。
-4. **不要把文件堆在仓库根**：新脚本放 `scripts/`（待建）或对应模块下，新文档放 `docs/`，新样例放 `mdk/` 或 `modules/` 对应子目录；仓库根只留 `build.gradle.kts` / `settings.gradle.kts` / `AGENTS.md` / `README.md` / `PLAN.md` / `.gitignore`。
-5. 整理完后再 `git status` 看一眼，确认工作区干净或仅剩明确说明的未提交项。
-6. **注意**：本规则的清理范围**不包括 `mc-shili/`**（见规则 9）。
+3. **补全回归测试**：本轮新引入的特性 / 修过的 bug，若还没有对应的 `src/test/` 用例或 `scripts/verify_*.ps1`，**当场补上**，不要把"待补测试"拖到下次。
+4. **清理测试 mod**：按第 2 节"测试 mod 获取规则"，把本轮测试时放进 `mc-shili/versions/26.2-mirage/mods/` 的 mod **移回** `mods-library/` 或删除（用户原本就在 `mods/` 里的 mod 不要动）。保持游戏 mods 目录干净。
+5. **不要把文件堆在仓库根**：新脚本放 `scripts/`，新文档放 `docs/`，新样例放 `mdk/` 或 `modules/` 对应子目录；仓库根只留 `build.gradle.kts` / `settings.gradle.kts` / `AGENTS.md` / `README.md` / `PLAN.md` / `.gitignore`。
+6. 整理完后再 `git status` 看一眼，确认工作区干净或仅剩明确说明的未提交项。
+7. **注意**：本规则的清理范围**不包括 `mc-shili/` 下除测试 mod 外的任何文件**（见规则 8）——不要为了"整理现场"去清 `mc-shili/` 下的日志、截图、saves。
 
-### 规则 8 · （已废弃，本规则原面向锋语项目的"桌面版导出函数中英双语"要求，在 Mirage Loader 无对应物）
-
-* 保留条目编号以兼容老引用；本工程**没有**桌面版、没有 `gui\_map.rs`、没有 C FFI 导出层，本规则**不生效**。
-* 若未来 Mirage 暴露面向用户的公共 API（`api/` 下的 `@Mod` / 事件类 / `DeferredRegister`）需要做双语文档注解，另立规则，不在此处默认生效。
-
-### 规则 9 · `mc-shili/` 是用户游戏目录，未经同意不得修改
+### 规则 8 · `mc-shili/` 是用户游戏目录，未经同意不得修改
 
 * **`mc-shili/` 目录是用户本人的 MC 运行沙盒**（含 `versions/26.2-mirage/`、`mods/`、`libraries/`、`natives/`、`options.txt` 等），里面的文件归属用户本人，AI 在任何情况下都不得擅自创建、修改、删除、重命名、移动其中任何文件或子目录。
 * 包括但不限于：不要为了"整理现场"去清 `mc-shili/` 下的日志、截图、shaderpacks、saves；不要把用户丢在 `mods/` 里的测试 mod 挪到 `mdk/`；不要改 `versions/26.2-mirage/\*.json` 配置。
-* **唯一例外**：用户在本轮对话中明确说"删掉 mc-shili/ 下的 xx"或"清理 mc-shili/"时，才可以按用户指定的范围操作；操作前先列出要删的文件清单让用户确认（除非用户已明确说"全部删掉"）。
+* **唯一例外**：① 用户在本轮对话中明确说"删掉 mc-shili/ 下的 xx"或"清理 mc-shili/"时；② 规则 7.4 测试 mod 清理（本轮自己放进去的 mod，自己清走）。其他任何情况都不动。
 * `mc-shili/` 下的产物也**不要 `git add`**——它在仓库外，本来就不进版本库。
-* 这条优先级高于规则 7 的"结束前整理现场"——规则 7 的清理范围**不包括 `mc-shili/`**。
 * 同样受保护的还有：`26.2/`（vanilla 官方目录）、`refs/`（只读参考源码）、`backups/`（历史快照）。
 
