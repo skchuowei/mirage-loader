@@ -44,6 +44,13 @@ public class DeferredRegister<T> {
     protected final String modId;
     /** 由 createBlocks/createItems 便捷工厂直接指定注册表路径，绕开编译期无 MC Registry 常量。 */
     private final String fixedPath;
+    /**
+     * 显式注册表路径（{@code minecraft:<path>} 去掉命名空间）。与 {@code fixedPath} 互为补充：
+     * {@code create(Registry, ns)} / {@code create(ResourceKey, ns)} 时并不直接持有 MC 注册表真类，
+     * 而是靠此路径让 Launcher 在 nativeBackend 里用 {@code BuiltInRegistries} 的字段名大小写映射找到注册表对象。
+     * 默认 {@code null}，由 {@link #resolveRegistryPath()} 从 {@code registryKey.toString()} 解析。
+     */
+    private String registryPath;
     private final List<RegisteredEntry<?>> entries = new ArrayList<>();
     private io.mirage.api.registry.DeferredRegister<T> bridge;
 
@@ -67,6 +74,18 @@ public class DeferredRegister<T> {
 
     public static <T> DeferredRegister<T> create(ResourceKey<? extends Registry<T>> key, String namespace) {
         return new DeferredRegister<>(key, namespace);
+    }
+
+    /**
+     * 显式指定注册表路径的工厂（clean-room 扩展，NeoForge 无此方法）：
+     * 让 mod 在无法获取 MC {@code Registries.*} 常量时，也能直接用路径字符串注册，
+     * 例如 {@code DeferredRegister.create("point_of_interest_type", "mymod")}。
+     * 路径即 {@code BuiltInRegistries} 字段名小写（来自 javap 实证），Launcher 据此反射找到注册表对象。
+     */
+    public static <T> DeferredRegister<T> create(String registryPath, String namespace) {
+        DeferredRegister<T> dr = new DeferredRegister<>(null, namespace, registryPath);
+        dr.registryPath = registryPath;
+        return dr;
     }
 
     /**
@@ -139,6 +158,10 @@ public class DeferredRegister<T> {
         }
 
         bridge = io.mirage.api.registry.DeferredRegister.create(elementType, modId);
+        // 把真实注册表路径带进 MG 代理，flush 时 Launcher 用它反射定位 BuiltInRegistries 字段，
+        // 这样即便元素类型简单名与注册表路径不一致（如 point_of_interest_type → PoiType），
+        // 也能注册进正确的注册表。
+        bridge.setRegistryPath(path);
         for (RegisteredEntry<?> e : entries) {
             e.forwardTo(bridge);
         }
@@ -147,9 +170,16 @@ public class DeferredRegister<T> {
                 + " 桥接 " + entries.size() + " 个条目到 MG DeferredRegister");
     }
 
+    /** 当前注册表路径（{@code minecraft:<path>} 去掉命名空间），供 Launcher 反射定位注册表对象。 */
+    String getRegistryPath() {
+        return resolveRegistryPath();
+    }
+
     /** registryKey 类型识别：26.x 起 ResourceKey.location() 已移除，直接从 toString() 解析。 */
     private String resolveRegistryPath() {
+        if (registryPath != null) return registryPath;
         if (fixedPath != null) return fixedPath;
+        if (registryKey == null) return "";
         // ResourceKey.toString() 形如 "ResourceKey[minecraft:root / minecraft:item]"
         // 斜杠后才是真正的注册表 ID "minecraft:item"
         String s = String.valueOf(registryKey);
@@ -168,7 +198,19 @@ public class DeferredRegister<T> {
 
     /**
      * 注册表 location 路径 → MC 元素类型（26.x 无混淆，类名稳定）。
-     * 只映射 Launcher nativeBackend 已支持的 item/block；其余返回 null。
+     *
+     * <p>覆盖 NeoForge mod 常用的「非 codec」注册表；路径（{@code minecraft:<path>} 去掉命名空间）
+     * 与 {@code BuiltInRegistries} 字段名小写一一对应，元素类全名均来自对 26.2.jar 的
+     * {@code javap} 实证，绝不猜测（见 AGENTS.md §9）。
+     * Launcher 侧也已支持任意路径 → 注册表对象的反射查找，所以这里映射到的元素类
+     * 都会被真正写入对应注册表。
+     *
+     * <p>注：纯 codec 注册表（biome_source / chunk_generator / material_condition / material_rule /
+     * density_function_type / float_provider_type / int_provider_type / dialog_type / permission_type 等）
+     * 的元素类型是 {@code com.mojang.serialization.MapCodec}，不在 26.2.jar 里、无法在本加载器侧实证，
+     * 故**不**映射，保持 DEFAULT→null，由 {@link #register(IEventBus)} 告警跳过（不会静默错注册）。
+     *
+     * <p>仅当路径本身拼错（对应字段不存在）时 {@link #register(IEventBus)} 才会告警跳过。
      */
     @SuppressWarnings("unchecked")
     private Class<T> mapElementType(String registryPath) {
@@ -176,6 +218,56 @@ public class DeferredRegister<T> {
             case "item" -> "net.minecraft.world.item.Item";
             case "block" -> "net.minecraft.world.level.block.Block";
             case "creative_mode_tab" -> "net.minecraft.world.item.CreativeModeTab";
+            // —— 以下为常用「非 item/block」注册表，补全桥接（元素类均已 javap 实证）——
+            case "enchantment" -> "net.minecraft.world.item.enchantment.Enchantment";
+            case "biome" -> "net.minecraft.world.level.biome.Biome";
+            case "mob_effect" -> "net.minecraft.world.effect.MobEffect";
+            case "sound_event" -> "net.minecraft.sounds.SoundEvent";
+            case "block_entity_type" -> "net.minecraft.world.level.block.entity.BlockEntityType";
+            case "fluid" -> "net.minecraft.world.level.material.Fluid";
+            case "potion" -> "net.minecraft.world.item.alchemy.Potion";
+            case "particle_type" -> "net.minecraft.core.particles.ParticleType";
+            case "attribute" -> "net.minecraft.world.entity.ai.attributes.Attribute";
+            case "menu" -> "net.minecraft.world.inventory.MenuType";
+            case "villager_profession" -> "net.minecraft.world.entity.npc.villager.VillagerProfession";
+            case "villager_type" -> "net.minecraft.world.entity.npc.villager.VillagerType";
+            case "point_of_interest_type" -> "net.minecraft.world.entity.ai.village.poi.PoiType";
+            case "game_event" -> "net.minecraft.world.level.gameevent.GameEvent";
+            case "data_component_type" -> "net.minecraft.core.component.DataComponentType";
+            case "decorated_pot_pattern" -> "net.minecraft.world.level.block.entity.DecoratedPotPattern";
+            case "map_decoration_type" -> "net.minecraft.world.level.saveddata.maps.MapDecorationType";
+            case "number_format_type" -> "net.minecraft.network.chat.numbers.NumberFormatType";
+            case "carver" -> "net.minecraft.world.level.levelgen.carver.WorldCarver";
+            case "feature" -> "net.minecraft.world.level.levelgen.feature.Feature";
+            case "chunk_status" -> "net.minecraft.world.level.chunk.status.ChunkStatus";
+            case "recipe_type" -> "net.minecraft.world.item.crafting.RecipeType";
+            case "recipe_serializer" -> "net.minecraft.world.item.crafting.RecipeSerializer";
+            case "stat_type" -> "net.minecraft.stats.StatType";
+            case "activity" -> "net.minecraft.world.entity.schedule.Activity";
+            case "memory_module_type" -> "net.minecraft.world.entity.ai.memory.MemoryModuleType";
+            case "sensor_type" -> "net.minecraft.world.entity.ai.sensing.SensorType";
+            case "structure_type" -> "net.minecraft.world.level.levelgen.structure.StructureType";
+            case "structure_placement" -> "net.minecraft.world.level.levelgen.structure.placement.StructurePlacementType";
+            case "structure_piece" -> "net.minecraft.world.level.levelgen.structure.pieces.StructurePieceType";
+            case "placement_modifier_type" -> "net.minecraft.world.level.levelgen.placement.PlacementModifierType";
+            case "blockstate_provider_type" -> "net.minecraft.world.level.levelgen.feature.stateproviders.BlockStateProviderType";
+            case "foliage_placer_type" -> "net.minecraft.world.level.levelgen.feature.foliageplacers.FoliagePlacerType";
+            case "trunk_placer_type" -> "net.minecraft.world.level.levelgen.feature.trunkplacers.TrunkPlacerType";
+            case "root_placer_type" -> "net.minecraft.world.level.levelgen.feature.rootplacers.RootPlacerType";
+            case "tree_decorator_type" -> "net.minecraft.world.level.levelgen.feature.treedecorators.TreeDecoratorType";
+            case "feature_size_type" -> "net.minecraft.world.level.levelgen.feature.featuresize.FeatureSizeType";
+            case "structure_processor" -> "net.minecraft.world.level.levelgen.structure.templatesystem.StructureProcessor";
+            case "structure_pool_element" -> "net.minecraft.world.level.levelgen.structure.pools.StructurePoolElementType";
+            case "height_provider_type" -> "net.minecraft.world.level.levelgen.heightproviders.HeightProviderType";
+            case "block_predicate_type" -> "net.minecraft.world.level.levelgen.blockpredicates.BlockPredicateType";
+            case "rule_test" -> "net.minecraft.world.level.levelgen.structure.templatesystem.RuleTestType";
+            case "pos_rule_test" -> "net.minecraft.world.level.levelgen.structure.templatesystem.PosRuleTestType";
+            case "command_argument_type" -> "net.minecraft.commands.synchronization.ArgumentTypeInfo";
+            case "position_source_type" -> "net.minecraft.world.level.gameevent.PositionSourceType";
+            case "trigger_types" -> "net.minecraft.advancements.triggers.CriterionTrigger";
+            case "consume_effect_type" -> "net.minecraft.world.item.consume_effects.ConsumeEffect$Type";
+            case "recipe_display" -> "net.minecraft.world.item.crafting.display.RecipeDisplay$Type";
+            case "slot_display" -> "net.minecraft.world.item.crafting.display.SlotDisplay$Type";
             default -> null;
         };
         if (cn == null) {

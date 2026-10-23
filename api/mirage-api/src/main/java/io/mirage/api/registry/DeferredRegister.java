@@ -56,10 +56,29 @@ public final class DeferredRegister<T> {
     private final String modId;
     private final List<Entry<T>> entries = new ArrayList<>();
     private boolean hooked;
+    /**
+     * 注册表路径（{@code minecraft:<path>} 去掉命名空间），来自 NeoForge 兼容层桥接时显式带入。
+     * 用于 nativeBackend 反射定位 {@code BuiltInRegistries} 字段——因为元素类型简单名（如
+     * {@code PoiType}）与注册表路径（{@code point_of_interest_type}）并不总是一致。
+     * 缺省 {@code null}，此时 nativeBackend 退化为元素类型简单名小写。
+     */
+    private String registryPath;
 
     private DeferredRegister(Class<T> type, String modId) {
         this.type = type;
         this.modId = modId;
+    }
+
+    /** 由 NeoForge 兼容层在桥接时调用：显式声明注册表路径。 */
+    public DeferredRegister<T> setRegistryPath(String path) {
+        this.registryPath = path;
+        return this;
+    }
+
+    /** 注册表路径；没有显式声明时退化为元素类型简单名小写。 */
+    public String registryPath() {
+        if (registryPath != null) return registryPath;
+        return type.getSimpleName().toLowerCase();
     }
 
     public static <T> DeferredRegister<T> create(Class<T> type, String modId) {

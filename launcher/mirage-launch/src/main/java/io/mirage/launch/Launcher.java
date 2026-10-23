@@ -47,6 +47,8 @@ public final class Launcher {
         // MID 缓存开关（调试用）：--mid-cache-force-regen 忽略缓存重转；--mid-cache-verbose 打印命中
         boolean forceRegen = hasFlag(args, "--mid-cache-force-regen");
         boolean midVerbose = hasFlag(args, "--mid-cache-verbose");
+        // 沙盒录制开关：--sandbox-record=off|auto|force（缺省 auto）
+        String sandboxMode = parseSandboxMode(args);
         io.mirage.loader.MidCache midCache = new io.mirage.loader.MidCache(gameDir, "26.2");
 
         io.mirage.loader.MirageDebug.setStage("解析 mod 清单");
@@ -54,7 +56,7 @@ public final class Launcher {
         LoadingScreen.setStage("解析 mod 清单...");
         LoadingScreen.setProgress(8);
 
-        List<ModContainer> mods = new Loader().discoverMods(gameDir, midCache, forceRegen, midVerbose);
+        List<ModContainer> mods = new Loader().discoverMods(gameDir, midCache, forceRegen, midVerbose, sandboxMode);
         io.mirage.loader.MirageDebug.setModTotal(mods.size());
         LoadingScreen.setModList(mods.stream().map(m -> m.manifest.id + " v" + m.manifest.version).toList());
         System.out.println("[Mirage] 发现 " + mods.size() + " 个 mod");
@@ -149,7 +151,9 @@ public final class Launcher {
             Class<?> bootstrap = Class.forName("net.minecraft.server.Bootstrap", true, mcl);
             bootstrap.getMethod("bootStrap").invoke(null);
 
-            // M5：Bootstrap 后 registry 已 freeze，反射 unfreeze BLOCK + ITEM + CREATIVE_MODE_TAB，注册 Mod 内容，再 freeze
+            // M5：Bootstrap 后 registry 已 freeze，反射解冻所有 MappedRegistry，注册 Mod 内容，再冻结。
+            // 之前只解冻 BLOCK/ITEM/CREATIVE_MODE_TAB，导致 entity_type/enchantment/biome 等
+            // DeferredRegister 无法注册（Registry is frozen / 跳过未知注册表类型）。
             System.out.println("[Mirage] 解冻注册表以注册 mod 内容 ...");
             io.mirage.loader.MirageDebug.setStage("解冻注册表");
             io.mirage.loader.MirageDebug.setProgress(42);
@@ -167,6 +171,7 @@ public final class Launcher {
             java.lang.reflect.Method unboundMethod = tagSetClass.getMethod("unbound");
             unboundMethod.setAccessible(true);
 
+            // 反射解冻单个 MappedRegistry（清空 intrusive holders + tags，置 frozen=false）
             java.util.function.Consumer<Object> unfreeze = reg -> {
                 try {
                     frozenField.setBoolean(reg, false);
@@ -175,13 +180,38 @@ public final class Launcher {
                 } catch (Exception e) { throw new RuntimeException(e); }
             };
 
+            // 遍历 registry-of-registries，对所有 MappedRegistry 实例解冻（vanilla 时序：先全解冻再注册后全冻结）
+            Object registryOfRegistries = builtInReg.getField("REGISTRY").get(null);
+            java.util.List<Object> allMappedRegistries = new java.util.ArrayList<>();
+            for (Object r : (java.lang.Iterable<?>) registryOfRegistries) {
+                if (mappedReg.isInstance(r)) {
+                    allMappedRegistries.add(r);
+                    unfreeze.accept(r);
+                }
+            }
+            System.out.println("[Mirage] 已解冻 " + allMappedRegistries.size() + " 个 MappedRegistry");
+
+            // 取常用的三个，给下面 special-case 用（语义不变）
             Object blockReg = builtInReg.getField("BLOCK").get(null);
-            unfreeze.accept(blockReg);
             Object itemReg = builtInReg.getField("ITEM").get(null);
-            unfreeze.accept(itemReg);
-            // 创造模式标签页注册表（mod 注册自定义 tab 需要）
             Object tabReg = builtInReg.getField("CREATIVE_MODE_TAB").get(null);
-            unfreeze.accept(tabReg);
+
+            // 注册表路径 → BuiltInRegistries 字段对象 的通用查找：
+            // 路径（如 "point_of_interest_type"）即字段名小写，反射取字段即可，无需逐类型写死。
+            java.util.function.Function<String, Object> lookupRegistry = path -> {
+                if (path == null || path.isEmpty()) return null;
+                try {
+                    java.lang.reflect.Field f =
+                            builtInReg.getField(path.toUpperCase(java.util.Locale.ENGLISH));
+                    return f.get(null);
+                } catch (NoSuchFieldException nsfe) {
+                    // 路径确实不存在（mod 拼错 / 该注册表本加载器不支持）→ 返回 null，调用方告警
+                    return null;
+                } catch (Exception e) {
+                    System.err.println("[Mirage] 查找注册表 " + path + " 失败: " + e);
+                    return null;
+                }
+            };
 
             // ---- DeferredRegister 闭环 ----
             // 时机：注册表已 unfreeze、mod 尚未初始化；flush() 仍发生在 unfreeze 窗口内。
@@ -194,19 +224,14 @@ public final class Launcher {
             java.lang.reflect.Method idFactory =
                     identifierCls.getMethod("fromNamespaceAndPath", String.class, String.class);
             DeferredRegister.setNativeBackend((dr, pending) -> {
-                // type() 是 Item.class / Block.class ...，取简单名小写映射到 BuiltInRegistries 字段
-                String regName = dr.type().getSimpleName().toLowerCase();
-                Object reg = switch (regName) {
-                    case "item" -> itemReg;
-                    case "block" -> blockReg;
-                    case "creativemodetab" -> tabReg;
-                    default -> null;
-                };
+                // 优先用 NeoForge 兼容层显式带入的注册表路径（元素类型简单名与路径不一定一致，
+                // 如 point_of_interest_type → PoiType）；无则退化为元素类型简单名小写。
+                String path = dr.registryPath();
+                Object reg = lookupRegistry.apply(path);
                 if (reg == null) {
-                    // TODO: creativemodetab / enchantment / entity_type 等注册表暂未映射。
-                    //       在拿不到 BuiltInRegistries 确切字段名证据前不瞎猜，跳过并打印。
+                    // 路径确实不存在 / 本加载器未支持（如纯 codec 注册表）→ 告警跳过，不静默错注册。
                     System.out.println("[Mirage] DeferredRegister: 跳过未知注册表类型 "
-                            + dr.type().getName() + " (mod=" + dr.modId()
+                            + path + " (mod=" + dr.modId()
                             + ", entries=" + pending.size() + ")");
                     return;
                 }
@@ -216,7 +241,7 @@ public final class Launcher {
                         Object id = idFactory.invoke(null, dr.modId(), e.getKey());
                         // CreativeModeTab.Builder.build() 不自动 setId，没有 intrusive holder，
                         // MappedRegistry.register 会断言失败。手动创建 intrusive holder 塞进去。
-                        if ("creativemodetab".equals(regName)) {
+                        if ("creativemodetab".equals(path)) {
                             try {
                                 Class<?> holderRefCls = Class.forName("net.minecraft.core.Holder$Reference", true, mcl);
                                 java.lang.reflect.Method createIntrusive = holderRefCls
@@ -231,7 +256,7 @@ public final class Launcher {
                         // BlockItem 构造不自动绑 block.item，手动反射绑定，否则 block.asItem()=AIR
                         // 导致 creative tab 构建时 new ItemStack(AIR) count=0 崩溃
                         try {
-                            if ("item".equals(regName)) {
+                            if ("item".equals(path)) {
                                 Class<?> blockItemCls = Class.forName("net.minecraft.world.item.BlockItem", true, mcl);
                                 if (blockItemCls.isInstance(value)) {
                                     java.lang.reflect.Field bf = blockItemCls.getDeclaredField("block");
@@ -253,7 +278,7 @@ public final class Launcher {
                         try {
                             ((java.util.Map<?, ?>) unregField.get(reg)).remove(value);
                         } catch (Exception ignore) {}
-                        System.out.println("[Mirage] DeferredRegister: 注册 " + regName
+                        System.out.println("[Mirage] DeferredRegister: 注册 " + path
                                 + " " + dr.modId() + ":" + e.getKey());
                     } catch (Exception ex) {
                         System.err.println("[Mirage] DeferredRegister 注册失败 "
@@ -582,6 +607,17 @@ public final class Launcher {
     private static boolean hasFlag(String[] args, String name) {
         for (String a : args) if (name.equals(a)) return true;
         return false;
+    }
+
+    /** 解析 --sandbox-record=<mode>；缺省 "auto"；非法值归 "auto"。 */
+    private static String parseSandboxMode(String[] args) {
+        for (String a : args) {
+            if (a.startsWith("--sandbox-record=")) {
+                String v = a.substring("--sandbox-record=".length()).trim().toLowerCase();
+                if (v.equals("off") || v.equals("auto") || v.equals("force")) return v;
+            }
+        }
+        return "auto";
     }
 
     private static void banner() {
