@@ -2,6 +2,7 @@ rootProject.name = "mirage-loader"
 
 // 核心加载器
 include(":launcher:mirage-launch")
+include(":lifecycle-starter")
 include(":core:mirage-loader")
 include(":core:mirage-mixin")
 include(":core:mirage-eventbus")
