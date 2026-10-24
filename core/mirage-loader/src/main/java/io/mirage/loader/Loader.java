@@ -10,7 +10,7 @@ import java.util.List;
 public class Loader {
 
     public List<ModContainer> discoverMods(Path gameDir) {
-        return discoverMods(gameDir, null, false, false);
+        return discoverMods(gameDir, null, false, false, "auto");
     }
 
     /**
@@ -20,10 +20,19 @@ public class Loader {
      */
     public List<ModContainer> discoverMods(Path gameDir, MidCache cache,
                                           boolean forceRegen, boolean verbose) {
+        return discoverMods(gameDir, cache, forceRegen, verbose, "auto");
+    }
+
+    /**
+     * @param sandboxMode 沙盒录制开关（off/auto/force）
+     */
+    public List<ModContainer> discoverMods(Path gameDir, MidCache cache,
+                                          boolean forceRegen, boolean verbose,
+                                          String sandboxMode) {
         Path modsDir = gameDir.resolve("mods");
         System.out.println("[Mirage] ---- 开始扫描 mod ----");
         try {
-            List<ModContainer> raw = new ModDiscoverer().discover(modsDir, cache, forceRegen, verbose);
+            List<ModContainer> raw = new ModDiscoverer().discover(modsDir, cache, forceRegen, verbose, sandboxMode);
             List<ModContainer> sorted = new DependencySorter().sort(raw);
             System.out.println("[Mirage] ---- 加载顺序（" + sorted.size() + " 个 mod）----");
             int i = 1;

@@ -30,7 +30,7 @@ public class ModDiscoverer {
     private static final String FABRIC_DESC = "fabric.mod.json";
 
     public List<ModContainer> discover(Path modsDir) throws IOException {
-        return discover(modsDir, null, false, false);
+        return discover(modsDir, null, false, false, "auto");
     }
 
     /**
@@ -41,6 +41,17 @@ public class ModDiscoverer {
      */
     public List<ModContainer> discover(Path modsDir, MidCache cache,
                                       boolean forceRegen, boolean verbose) throws IOException {
+        return discover(modsDir, cache, forceRegen, verbose, "auto");
+    }
+
+    /**
+     * 扫描 mods 目录。
+     * @param sandboxMode 沙盒录制开关：{@code off} 完全不录；{@code auto} 缺 recorded 才录；
+     *                    {@code force} 无视缓存强制重录。
+     */
+    public List<ModContainer> discover(Path modsDir, MidCache cache,
+                                      boolean forceRegen, boolean verbose,
+                                      String sandboxMode) throws IOException {
         List<ModContainer> result = new ArrayList<>();
         if (!Files.isDirectory(modsDir)) {
             System.out.println("[Mirage] mod 目录不存在: " + modsDir + "（跳过）");
@@ -144,6 +155,9 @@ public class ModDiscoverer {
                     }
 
                     // ---- 4. neoforge.mods.toml（带 MID 缓存） ----
+                    boolean sandboxEnabled = !"off".equalsIgnoreCase(sandboxMode);
+                    boolean sandboxForce = "force".equalsIgnoreCase(sandboxMode);
+
                     NeoForgeModDetector.Detected neo = null;
                     MidCache.Entry cached = (cache != null)
                             ? cache.lookup(jar, null, forceRegen) : null;
@@ -156,16 +170,47 @@ public class ModDiscoverer {
                     }
                     if (neo == null) {
                         neo = NeoForgeModDetector.detect(jf);
-                        if (neo != null && cache != null) {
+                    }
+                    if (neo != null) {
+                        // 沙盒录制：缓存 miss 且开关允许（auto/force）时录；缓存命中但缺 recorded 时补录；
+                        // force 时无视缓存强制重录。off 时不录。
+                        MidCache.Recorded recorded = (cached != null) ? cached.recorded : null;
+                        boolean needRecord = sandboxEnabled
+                                && (recorded == null || sandboxForce);
+                        if (needRecord) {
+                            long t0 = System.currentTimeMillis();
+                            recorded = io.mirage.loader.sandbox.SandboxRecorder.record(jar, neo);
+                            if (recorded.failed) {
+                                System.err.println("[Mirage][Sandbox] WARN mod=" + neo.id
+                                        + " 录制失败: " + recorded.error + "，降级为只存元数据");
+                            } else {
+                                System.out.println("[Mirage][Sandbox] 录制 " + neo.id
+                                        + " 完成 (" + recorded.record_duration_ms + " ms, "
+                                        + recorded.touched_apis.size() + " apis, "
+                                        + recorded.registered_events.size() + " events)");
+                            }
+                            // 写回缓存
+                            if (cache != null) {
+                                try {
+                                    cache.store(jar, neo, recorded);
+                                    if (verbose) System.out.println("[Mirage]   · MID 缓存已写: " + neo.id);
+                                } catch (IOException e) {
+                                    System.err.println("[Mirage] MID 缓存写入失败: " + e);
+                                }
+                            }
+                        } else if (sandboxEnabled && recorded != null && verbose) {
+                            System.out.println("[Mirage][Sandbox] 命中缓存: " + neo.id
+                                    + "（已录制，跳过沙盒）");
+                        } else if (cached == null && cache != null) {
+                            // 沙盒关闭：仍写 detected 缓存（保持旧行为，缓存元数据）
                             try {
-                                cache.store(jar, neo);
+                                cache.store(jar, neo, recorded);
                                 if (verbose) System.out.println("[Mirage]   · MID 缓存已写: " + neo.id);
                             } catch (IOException e) {
                                 System.err.println("[Mirage] MID 缓存写入失败: " + e);
                             }
                         }
-                    }
-                    if (neo != null) {
+
                         if (byId.containsKey(neo.id)) {
                             throw new IOException("Duplicate mod id '" + neo.id + "'");
                         }

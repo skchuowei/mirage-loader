@@ -30,6 +30,10 @@ public class NeoForgeModDetector {
         public String version;
         public String displayName;
         public String mainClass;
+        /** mod 声明期望的 NeoForge 版本区间（[[dependencies.*]] modId="neoforge" 的 versionRange）。 */
+        public String neoForgeVersionRange;
+        /** mod 声明期望的 MC 版本区间（[[dependencies.*]] modId="minecraft" 的 versionRange）。 */
+        public String mcVersionRange;
 
         /** Gson 反序列化用无参构造。 */
         public Detected() {}
@@ -74,10 +78,58 @@ public class NeoForgeModDetector {
             version = "1.0.0";
         }
 
-        // 3. ASM 扫描找 @Mod 主类
+        // 3. 解析 [[dependencies.*]] 里的 neoforge / minecraft 版本区间
+        String neoVer = dependencyVersionRange(toml, "neoforge");
+        String mcVer = dependencyVersionRange(toml, "minecraft");
+
+        // 4. ASM 扫描找 @Mod 主类
         String mainClass = findModMainClass(jar);
 
-        return new Detected(modId, version, displayName, mainClass);
+        Detected d = new Detected(modId, version, displayName, mainClass);
+        d.neoForgeVersionRange = neoVer;
+        d.mcVersionRange = mcVer;
+        return d;
+    }
+
+    /**
+     * 在 [[dependencies.<modId>]] 数组表段里，找表内 {@code modId = "<dep>"} 的 {@code versionRange}。
+     * 段头形如 {@code [[dependencies.ferritecore]]}，表内键 {@code modId} / {@code versionRange}。
+     * 找到第一个匹配段即返回；找不到返回 null（不报错，非 mod 的错）。
+     */
+    private static String dependencyVersionRange(String toml, String depModId) {
+        boolean inDeps = false;
+        String currentModId = null;
+        for (String raw : toml.split("\r?\n")) {
+            String line = raw.trim();
+            if (line.startsWith("[[")) {
+                // 只有 [[dependencies.*]] 段才跟踪
+                inDeps = line.startsWith("[[dependencies.");
+                currentModId = null;
+                continue;
+            }
+            if (!inDeps) continue;
+            if (line.startsWith("#") || line.isEmpty()) continue;
+            int eq = line.indexOf('=');
+            if (eq < 0) continue;
+            String k = line.substring(0, eq).trim();
+            String v = stripQuotesAndComment(line.substring(eq + 1).trim());
+            if (k.equals("modId")) {
+                currentModId = v;
+            } else if (k.equals("versionRange") && depModId.equals(currentModId)) {
+                return v;
+            }
+        }
+        return null;
+    }
+
+    /** 去行尾注释 + 去首尾成对双引号。最小 toml 处理，够 dependency 段用。 */
+    private static String stripQuotesAndComment(String v) {
+        int hash = v.indexOf('#');
+        if (hash >= 0) v = v.substring(0, hash).trim();
+        if (v.startsWith("\"") && v.endsWith("\"") && v.length() >= 2) {
+            v = v.substring(1, v.length() - 1);
+        }
+        return v;
     }
 
     /**

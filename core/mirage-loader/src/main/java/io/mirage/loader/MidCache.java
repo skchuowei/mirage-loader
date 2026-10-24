@@ -29,12 +29,30 @@ public final class MidCache {
 
     /** 缓存文件头 + 载荷。Gson 可序列化。 */
     public static final class Entry {
-        public String specVersion;        // 固定 "0.1"
+        public String specVersion;        // 固定 "0.2"（0.1 → 0.2 引入 recorded 可选字段）
         public String agVersion;          // = NeoForgeModDetector.AG_VERSION
         public String mcVersion;          // 如 "26.2"
         public String jarSha256;          // mod jar 全文件 SHA-256（hex）
         public long   cachedAt;           // epoch millis
         public NeoForgeModDetector.Detected detected;
+
+        /** 沙盒录制结果（MSR-neo）。null = 老缓存未录制过，需补录。 */
+        public Recorded recorded;
+    }
+
+    /**
+     * 沙盒录制载荷（MSR-neo）。Gson 可序列化，所有字段可空/缺省。
+     * 写进 {@link Entry#recorded} 可选子对象，与老字段共存。
+     */
+    public static final class Recorded {
+        public String recorded_loader_version;  // mod 声明期望的 NeoForge 版本区间，如 "[26.1.0.1-beta,)"
+        public String recorded_mc_version;      // mod 声明期望的 MC 版本区间，如 "[26.1,27)"
+        public java.util.List<String> touched_apis;      // 构造/<clinit> 触达的 API 全限定名（类名+方法名）
+        public java.util.List<String> registered_events; // addListener/register 挂上去的事件类全限定名
+        public int deferred_register_count;     // 构造里 create 了几个 DeferredRegister
+        public long record_duration_ms;         // 沙盒耗时
+        public boolean failed;                  // 构造是否崩 / 超时
+        public String error;                    // failed=true 时填异常类名 + message；否则 null
     }
 
     private final Path cacheRoot;
@@ -100,15 +118,24 @@ public final class MidCache {
 
     /** 写缓存。文件名 = &lt;modId&gt;+&lt;jarSha256前16位&gt;.json。 */
     public void store(Path jar, NeoForgeModDetector.Detected d) throws IOException {
+        store(jar, d, null);
+    }
+
+    /**
+     * 写缓存，可带沙盒录制载荷。
+     * @param recorded 沙盒录制结果；null 时只写 detected（等价于旧行为）。
+     */
+    public void store(Path jar, NeoForgeModDetector.Detected d, Recorded recorded) throws IOException {
         if (!Files.isDirectory(cacheRoot)) return;
         String jarSha = sha256(jar);
         Entry e = new Entry();
-        e.specVersion = "0.1";
+        e.specVersion = "0.2";
         e.agVersion = NeoForgeModDetector.AG_VERSION;
         e.mcVersion = mcVersion;
         e.jarSha256 = jarSha;
         e.cachedAt = System.currentTimeMillis();
         e.detected = d;
+        e.recorded = recorded;
 
         String safeId = d.id.replaceAll("[^a-zA-Z0-9_.-]", "_");
         Path out = cacheRoot.resolve(safeId + "+" + jarSha.substring(0, 16) + ".json");
