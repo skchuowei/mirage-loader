@@ -1,7 +1,7 @@
 # NeoForge 兼容层缺口清单
 
-> 评估日期：2026-10-24（2026-10-24 按代码实况复核修订；2026-10-25 P0 四条全部落地）
-> 结论：**P0 已补齐，可开始小规模试跑（事件监听类 mod）**；P1 起仍未做。
+> 评估日期：2026-10-24（2026-10-24 按代码实况复核修订；2026-10-25 P0 四条全部落地；2026-10-25 P1.7 依赖拓扑排序落地）
+> 结论：**P0 已补齐 + P1.7 依赖拓扑排序已落地**，可开始小规模试跑（事件监听类 mod、多 mod 依赖包）；P1.5/P1.6 待补。
 > 本文列出大规模测试前必须补齐的能力缺口，按优先级排序。文中"已具备"均以代码为准，不采信旧文档。
 
 ---
@@ -20,7 +20,7 @@
 | mod 主类实例化 | ✅ 无参构造 + IEventBus 注入式构造 |
 | 生命周期事件 post | ⚠️ **只 post 了 3 个**：ConstructMod / CommonSetup / ClientSetup。`FMLDedicatedServerSetupEvent` 只有类定义，**从未 post**（无服务端启动链路） |
 | 资源包（assets） | ✅ 已接入：织入 `VanillaPackResourcesBuilder.build()` → `MirageDebug.exposeModNamespaces` 把 mod jar 的 `assets/` 解压并以 CLIENT_RESOURCES 注册 |
-| 依赖拓扑排序 | ⚠️ 排序器已存在（`DependencySorter`，Kahn + 环检测，`Loader` 已调用），但 **NeoForge 的 `[[dependencies.X]]` 没有写进 `manifest.depends`**，Fabric 的 depends 也在转换时被置 null——对 NeoForge mod 实际等于没排序 |
+| 依赖拓扑排序 | ✅ `DependencySorter`（Kahn + 环检测，`Loader` 已调用）现已吃到 NeoForge mod 的 `[[dependencies.X]]`：`NeoForgeModDetector.parseDependencies()` 解析全部依赖段，mandatory 的 mod 间依赖写入 `Detected.depends` → `ModDiscoverer` 落到 `manifest.depends`（平台依赖 neoforge/minecraft 只记版本区间，可选依赖不入约束避免误 FATAL）。AG_VERSION 已 bump 到 0.1.1 使 MID 缓存重生。Fabric 的 depends 转换时仍置 null（见 P2 遗留）。 |
 
 ---
 
@@ -87,11 +87,11 @@
 
 **问题**：多人 mod、需要服务端-客户端同步的 mod 直接挂。
 
-#### 7. NeoForge mod 依赖没有进入拓扑排序
+#### 7. ~~NeoForge mod 依赖没有进入拓扑排序~~ ✅ 已完成（2026-10-25）
 
-**现状**：`[[dependencies.<modid>]]` 只解析了 neoforge/minecraft 的 versionRange，没有把其它 mod 依赖写进 `ModManifest.depends`；`DependencySorter` 虽然存在且被 `Loader` 调用，但对 NeoForge mod 拿不到依赖数据。
+**现状（修复前）**：`[[dependencies.<modid>]]` 只解析了 neoforge/minecraft 的 versionRange，没有把其它 mod 依赖写进 `ModManifest.depends`。
 
-**修复**：解析 `[[dependencies.*]]` 全表 → 填 `manifest.depends` → 走现有拓扑排序。
+**修复（已落地）**：`NeoForgeModDetector.parseDependencies()` 解析全部 `[[dependencies.*]]` 段，mandatory 的 mod 间依赖（依赖目标 modId）写入 `Detected.depends` → `ModDiscoverer` 落到 `manifest.depends` → 复用现有 `DependencySorter` 拓扑排序 + 缺失依赖 FATAL 校验。平台依赖(neoforge/minecraft/forge/fml/java/javafml)只记录版本区间，可选依赖不入约束避免误 FATAL。AG_VERSION bump 0.1.0→0.1.1 强制 MID 缓存重生。
 
 ---
 

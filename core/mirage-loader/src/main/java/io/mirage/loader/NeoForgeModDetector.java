@@ -8,6 +8,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Enumeration;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Set;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
@@ -22,7 +25,7 @@ import java.util.jar.JarFile;
 public class NeoForgeModDetector {
 
     /** 当前 AG（转译/识别）版本。写入 MID 缓存文件头，AG 升级后旧缓存自动失效重转。 */
-    public static final String AG_VERSION = "0.1.0";
+    public static final String AG_VERSION = "0.1.1";
 
     /** 检测结果。字段为 public 非 final，便于 Gson 反序列化。 */
     public static class Detected {
@@ -34,6 +37,10 @@ public class NeoForgeModDetector {
         public String neoForgeVersionRange;
         /** mod 声明期望的 MC 版本区间（[[dependencies.*]] modId="minecraft" 的 versionRange）。 */
         public String mcVersionRange;
+
+        /** 强制（mandatory）的 mod 间依赖：被依赖 modId -> 版本区间（不含平台依赖 neoforge/minecraft 等）。
+         *  供 Loader 的 DependencySorter 拓扑排序；可选依赖不入此表，避免缺失时误 FATAL。 */
+        public Map<String, String> depends = new LinkedHashMap<>();
 
         /** Gson 反序列化用无参构造。 */
         public Detected() {}
@@ -78,33 +85,36 @@ public class NeoForgeModDetector {
             version = "1.0.0";
         }
 
-        // 3. 解析 [[dependencies.*]] 里的 neoforge / minecraft 版本区间
-        String neoVer = dependencyVersionRange(toml, "neoforge");
-        String mcVer = dependencyVersionRange(toml, "minecraft");
+        // 3. 解析 [[dependencies.*]]：平台依赖(neoforge/minecraft)记录版本区间，
+        //    mandatory 的 mod 间依赖写入 depends 供拓扑排序
+        Detected d = new Detected(modId, version, displayName, null);
+        parseDependencies(toml, d);
 
         // 4. ASM 扫描找 @Mod 主类
-        String mainClass = findModMainClass(jar);
-
-        Detected d = new Detected(modId, version, displayName, mainClass);
-        d.neoForgeVersionRange = neoVer;
-        d.mcVersionRange = mcVer;
+        d.mainClass = findModMainClass(jar);
         return d;
     }
 
     /**
-     * 在 [[dependencies.<modId>]] 数组表段里，找表内 {@code modId = "<dep>"} 的 {@code versionRange}。
-     * 段头形如 {@code [[dependencies.ferritecore]]}，表内键 {@code modId} / {@code versionRange}。
-     * 找到第一个匹配段即返回；找不到返回 null（不报错，非 mod 的错）。
+     * 解析全部 {@code [[dependencies.<owningModId>]]} 段：
+     *   - 平台依赖（neoforge / minecraft / forge / fml / java / javafml）只记录版本区间供诊断；
+     *   - mandatory 的 mod 间依赖（依赖目标 modId）写入 {@code d.depends}，供 DependencySorter 拓扑排序；
+     *   - 可选（mandatory=false）依赖不入约束表，避免缺失时误 FATAL。
+     * 一个 jar 即一个 mod，所有依赖段都属于该 mod。
      */
-    private static String dependencyVersionRange(String toml, String depModId) {
+    private static void parseDependencies(String toml, Detected d) {
         boolean inDeps = false;
-        String currentModId = null;
+        String curModId = null;
+        String curVersionRange = null;
+        boolean curMandatory = false;
         for (String raw : toml.split("\r?\n")) {
             String line = raw.trim();
             if (line.startsWith("[[")) {
-                // 只有 [[dependencies.*]] 段才跟踪
+                if (inDeps) recordDep(d, curModId, curVersionRange, curMandatory);
                 inDeps = line.startsWith("[[dependencies.");
-                currentModId = null;
+                curModId = null;
+                curVersionRange = null;
+                curMandatory = false;
                 continue;
             }
             if (!inDeps) continue;
@@ -113,14 +123,31 @@ public class NeoForgeModDetector {
             if (eq < 0) continue;
             String k = line.substring(0, eq).trim();
             String v = stripQuotesAndComment(line.substring(eq + 1).trim());
-            if (k.equals("modId")) {
-                currentModId = v;
-            } else if (k.equals("versionRange") && depModId.equals(currentModId)) {
-                return v;
+            switch (k) {
+                case "modId" -> curModId = v;
+                case "versionRange" -> curVersionRange = v;
+                case "mandatory" -> curMandatory = Boolean.parseBoolean(v);
+                default -> { /* ordering/side 等忽略 */ }
             }
         }
-        return null;
+        if (inDeps) recordDep(d, curModId, curVersionRange, curMandatory);
     }
+
+    private static void recordDep(Detected d, String modId, String versionRange, boolean mandatory) {
+        if (modId == null || modId.isEmpty() || modId.equals(d.id)) return; // 跳过自身
+        if (PLATFORM_MODS.contains(modId)) {
+            if (modId.equals("neoforge")) d.neoForgeVersionRange = versionRange;
+            else if (modId.equals("minecraft")) d.mcVersionRange = versionRange;
+            return;
+        }
+        if (mandatory) {
+            d.depends.put(modId, versionRange == null ? "" : versionRange);
+        }
+    }
+
+    /** 非排序目标的平台/加载器依赖（不进 mod 间拓扑约束）。 */
+    private static final Set<String> PLATFORM_MODS = Set.of(
+            "neoforge", "minecraft", "forge", "fml", "java", "javafml");
 
     /** 去行尾注释 + 去首尾成对双引号。最小 toml 处理，够 dependency 段用。 */
     private static String stripQuotesAndComment(String v) {

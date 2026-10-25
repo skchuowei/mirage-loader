@@ -220,6 +220,11 @@ public class ModDiscoverer {
                         m.name = (neo.displayName == null || neo.displayName.isEmpty()) ? neo.id : neo.displayName;
                         m.side = "both";
                         m.mainClass = neo.mainClass;
+                        if (neo.depends != null && !neo.depends.isEmpty()) {
+                            m.depends = new java.util.LinkedHashMap<>(neo.depends);
+                            System.out.println("[Mirage]   · " + neo.id + " 依赖(拓扑排序): "
+                                    + String.join(", ", neo.depends.keySet()));
+                        }
                         Map<String, List<String>> eps = new java.util.LinkedHashMap<>();
                         eps.put("main", neo.mainClass != null ? List.of(neo.mainClass) : List.of());
                         eps.put("client", List.of());
