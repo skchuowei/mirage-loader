@@ -1,0 +1,17 @@
+modLoader="javafml"
+loaderVersion="[1,)"
+license="MIT"
+
+[[mods]]
+    modId="neop0test"
+    version="1.0.0"
+    displayName="Neo P0 Test"
+    authors="Mirage"
+    description="Minimal NeoForge game-event smoke test mod for Mirage compat layer"
+
+[[dependencies.neop0test]]
+    modId="neoforge"
+    mandatory=true
+    versionRange="[1,)"
+    ordering="NONE"
+    side="BOTH"

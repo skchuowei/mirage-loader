@@ -2,10 +2,22 @@
   "required": true,
   "package": "io.mirage.mixin",
   "mixins": [
-    "MirageTestMixin"
+    "MirageTestMixin",
+    "NeoServerLevelTickMixin",
+    "NeoMinecraftServerTickMixin",
+    "NeoEntityTickMixin",
+    "NeoPlayerTickMixin",
+    "NeoServerPlayerTickMixin",
+    "NeoLivingEntityMixin",
+    "NeoServerLevelEntityJoinMixin",
+    "NeoPlayerListMixin",
+    "NeoCommandsMixin",
+    "NeoServerPlayerGameModeMixin"
   ],
   "client": [
-    "CreativeModeInventoryScreenMixin"
+    "CreativeModeInventoryScreenMixin",
+    "NeoClientLevelTickMixin",
+    "NeoClientLevelEntityJoinMixin"
   ],
   "injectors": {
     "defaultRequire": 1

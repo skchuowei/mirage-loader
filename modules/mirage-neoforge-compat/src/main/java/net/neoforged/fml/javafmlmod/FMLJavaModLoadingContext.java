@@ -1,6 +1,7 @@
 package net.neoforged.fml.javafmlmod;
 
 import io.mirage.neoforge.runtime.NeoEventBusImpl;
+import io.mirage.neoforge.runtime.NeoForgeEventBridge;
 import net.neoforged.bus.api.IEventBus;
 
 /**
@@ -17,7 +18,8 @@ import net.neoforged.bus.api.IEventBus;
  */
 public final class FMLJavaModLoadingContext {
 
-    private static final NeoEventBusImpl MOD_BUS = new NeoEventBusImpl();
+    /** 与游戏事件派发共用同一条总线，保证 mod 注册的监听器能收到运行时事件。 */
+    private static final NeoEventBusImpl MOD_BUS = NeoForgeEventBridge.bus();
     private static final FMLJavaModLoadingContext INSTANCE = new FMLJavaModLoadingContext();
 
     public static FMLJavaModLoadingContext get() {

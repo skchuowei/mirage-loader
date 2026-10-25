@@ -15,6 +15,10 @@ dependencies {
     // 不打进 fat jar，也不做运行期依赖。
     compileOnly(rootProject.files("../mc-shili/versions/26.2/26.2.jar"))
     compileOnly(rootProject.files("../mc-shili/libraries/com/mojang/brigadier/1.3.10/brigadier-1.3.10.jar"))
+    compileOnly(rootProject.files("../mc-shili/libraries/it/unimi/dsi/fastutil/8.5.18/fastutil-8.5.18.jar"))
+    compileOnly(rootProject.files("../mc-shili/libraries/com/mojang/datafixerupper/10.0.21/datafixerupper-10.0.21.jar"))
+    // NeoForge 游戏事件派发入口（运行时由 fat jar 提供，仅编译期可见）
+    compileOnly(project(":modules:mirage-neoforge-compat"))
 }
 
 // 本模块要直接引用 class 文件版本 69 的原版类（MC 26.2 基于 JDK 25），
