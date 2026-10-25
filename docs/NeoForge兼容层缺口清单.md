@@ -1,7 +1,7 @@
 # NeoForge 兼容层缺口清单
 
-> 评估日期：2026-10-24（2026-10-24 按代码实况复核修订；2026-10-25 P0 四条全部落地；2026-10-25 P1.7 依赖拓扑排序落地）
-> 结论：**P0 已补齐 + P1.7 依赖拓扑排序已落地**，可开始小规模试跑（事件监听类 mod、多 mod 依赖包）；P1.5/P1.6 待补。
+> 评估日期：2026-10-24（2026-10-24 按代码实况复核修订；2026-10-25 P0 四条全部落地；2026-10-25 P1.7 依赖拓扑排序落地；2026-10-25 P1.5 生命周期事件+ModConfig 落地）
+> 结论：**P0 + P1.7 + P1.5 已落地**，可开始小规模试跑（事件监听类 mod、多 mod 依赖包、配置型 mod）；P1.6 网络包待补。
 > 本文列出大规模测试前必须补齐的能力缺口，按优先级排序。文中"已具备"均以代码为准，不采信旧文档。
 
 ---
@@ -18,7 +18,8 @@
 | DeferredRegister 桥接 | ✅ **52 种**注册表路径（item/block/creative_mode_tab/enchantment/biome/mob_effect/sound_event/block_entity_type/fluid/potion/particle_type/attribute/menu/各种世界生成器等）；纯 codec 注册表按设计不映射并告警跳过 |
 | RegistryObject / DeferredHolder / DeferredBlock / DeferredItem | ✅ |
 | mod 主类实例化 | ✅ 无参构造 + IEventBus 注入式构造 |
-| 生命周期事件 post | ⚠️ **只 post 了 3 个**：ConstructMod / CommonSetup / ClientSetup。`FMLDedicatedServerSetupEvent` 只有类定义，**从未 post**（无服务端启动链路） |
+| 生命周期事件 post | ✅ Construct / CommonSetup / ClientSetup / **InterModEnqueue / InterModProcess** 均已 post（`Launcher.postNeoLifecycle`）；**ModConfigEvent**(Loading/Reloading) 随 `ModConfig` 注册加载后 post。`FMLDedicatedServerSetupEvent` 仍只有类定义不 post（无服务端启动链路，属预期） |
+| ModConfig 配置系统 | ✅ `net.neoforged.fml.config`：`ModConfig`（COMMON/CLIENT/SERVER 三类型，启动时自动从 `config/<modid>-<type>.toml` 加载，缺失则生成默认）+ `TomlConfigIO`（扁平键 + 单层 `[table]` 段 + int/long/double/bool/string/list 读写）+ `ConfigData`/`TomlConfigData` 取值 API + `IConfigSpec` stub + `ModLoadingContext.registerConfig()` 入口 |
 | 资源包（assets） | ✅ 已接入：织入 `VanillaPackResourcesBuilder.build()` → `MirageDebug.exposeModNamespaces` 把 mod jar 的 `assets/` 解压并以 CLIENT_RESOURCES 注册 |
 | 依赖拓扑排序 | ✅ `DependencySorter`（Kahn + 环检测，`Loader` 已调用）现已吃到 NeoForge mod 的 `[[dependencies.X]]`：`NeoForgeModDetector.parseDependencies()` 解析全部依赖段，mandatory 的 mod 间依赖写入 `Detected.depends` → `ModDiscoverer` 落到 `manifest.depends`（平台依赖 neoforge/minecraft 只记版本区间，可选依赖不入约束避免误 FATAL）。AG_VERSION 已 bump 到 0.1.1 使 MID 缓存重生。Fabric 的 depends 转换时仍置 null（见 P2 遗留）。 |
 
@@ -72,14 +73,13 @@
 
 ### P1：常见 mod 会用到的
 
-#### 5. 生命周期事件缺一半
+#### 5. ~~生命周期事件缺一半~~ ✅ 已完成（2026-10-25）
 
-**现状**：只 post 了 3 个（Construct / CommonSetup / ClientSetup）。
-
-**缺失**：
-- `InterModEnqueueEvent` / `InterModProcessEvent`（mod 间通信）、`FMLDedicatedServerSetupEvent`（有类无 post）
-- `ModConfigEvent`（配置加载 / 重载）
-- 配置文件系统（`ModConfig` + `.toml` 配置文件读写）
+**修复（已落地）**：
+- `InterModEnqueueEvent` / `InterModProcessEvent` 已建类并在 `Launcher.postNeoLifecycle` 按 NeoForge 时序 post（Construct → CommonSetup → InterModEnqueue → InterModProcess → ClientSetup）。
+- `ModConfigEvent`（含 `Loading` / `Reloading` 子类）+ `IMC`（`InterModComms.sendTo` / `get`）已建。
+- 配置系统：`ModConfig`（启动加载 `config/<modid>-<type>.toml`，缺失自动生成）+ `TomlConfigIO`（扁平键+单层 table+基础类型）+ `ModLoadingContext.registerConfig()` 注册入口；`Launcher` 在 mod 实例化前设置活跃 mod 供 `ModLoadingContext` 定位。
+- 事件类均无参构造，`postNeoLifecycle` 反射实例化后 post 全局 mod bus，`ModConfigEvent` 走 `Launcher.fireModConfigEvent` 携带 ModConfig 实例。
 
 #### 6. 网络包缺失
 
@@ -135,7 +135,7 @@ DeferredRegister 映射了 `block_entity_type` / `menu`，但 `MenuScreens` 注�
 | 2 | 游戏事件类（20+）+ Mixin 注入 post 调用点 | 最大块：新增 event 包 + 一批 Mixin 类 |
 | 3 | NeoForge 依赖写进 `manifest.depends`（复用现有 DependencySorter） | 改 ModDiscoverer + NeoForgeModDetector |
 | 4 | 数据包 `data/` 注册（复用现有资源包管线） | 改 MirageDebug.extractAssets |
-| 5 | 网络包 + 配置系统 | 远期：SimpleChannel + ModConfig |
+| 5 | ~~网络包 + 配置系统~~ 配置系统已落地（P1.5）；网络包（P1.6 SimpleChannel 本地通路）待补 | SimpleChannel + ModConfig |
 
 ---
 
