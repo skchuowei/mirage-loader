@@ -67,7 +67,17 @@ public final class RegistryWindow {
     public static RegistryWindow open(LifecycleContext ctx) throws Exception {
         ClassLoader mcl = StageSupport.get(ctx, "S3.classLoader");
 
+        // ---- 保序：拆分前 Launcher 在 Bootstrap 前先运行 SharedConstants.tryDetectVersion() ----
+        // DataFixers.<clinit> 经 SharedConstants.getCurrentVersion() 读游戏版本，
+        // 缺此步 ISE("Game version not set")（2026-10-25 崩溃回归：LS 迁移漏迁此调用）。
+        System.out.println("[Mirage] 运行 SharedConstants.tryDetectVersion() ...");
+        io.mirage.loader.MirageDebug.setStage("检测 MC 版本");
+        io.mirage.loader.MirageDebug.setProgress(22);
+        Class<?> sc = Class.forName("net.minecraft.SharedConstants", true, mcl);
+        sc.getMethod("tryDetectVersion").invoke(null);
+
         // ---- 单线程：mod 全部初始化完成后再启动 Minecraft 主类 ----
+        System.out.println("[Mirage] 运行 Bootstrap.bootStrap() ...");
         io.mirage.loader.MirageDebug.setStage("初始化注册表");
         io.mirage.loader.MirageDebug.setProgress(32);
         Class<?> bootstrap = Class.forName("net.minecraft.server.Bootstrap", true, mcl);
