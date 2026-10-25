@@ -16,6 +16,11 @@ dependencies {
     // MC jar 的签名里引用了这两个库的类型，javac 读取 26.2 类文件时需要
     compileOnly(rootProject.files("../mc-shili/libraries/it/unimi/dsi/fastutil/8.5.18/fastutil-8.5.18.jar"))
     compileOnly(rootProject.files("../mc-shili/libraries/com/mojang/datafixerupper/10.0.21/datafixerupper-10.0.21.jar"))
+    // P1.6：26.2 类文件签名带 jspecify 注解，javac 符号补全需要它
+    compileOnly(rootProject.files("../mc-shili/libraries/org/jspecify/jspecify/1.0.0/jspecify-1.0.0.jar"))
+    // P1.6：FriendlyByteBuf / Identifier.STREAM_CODEC 签名引用 netty ByteBuf
+    compileOnly(rootProject.files("../mc-shili/libraries/io/netty/netty-buffer/4.2.15.Final/netty-buffer-4.2.15.Final.jar"))
+    compileOnly(rootProject.files("../mc-shili/libraries/io/netty/netty-common/4.2.15.Final/netty-common-4.2.15.Final.jar"))
 }
 
 // 事件类要读 v69 class（MC 26.2 基于 JDK 25），toolchain 用 25、字节码保持 21。

@@ -1,7 +1,7 @@
 # NeoForge 兼容层缺口清单
 
-> 评估日期：2026-10-24（2026-10-24 按代码实况复核修订；2026-10-25 P0 四条全部落地；2026-10-25 P1.7 依赖拓扑排序落地；2026-10-25 P1.5 生命周期事件+ModConfig 落地）
-> 结论：**P0 + P1.7 + P1.5 已落地**，可开始小规模试跑（事件监听类 mod、多 mod 依赖包、配置型 mod）；P1.6 网络包待补。
+> 评估日期：2026-10-24（2026-10-24 按代码实况复核修订；2026-10-25 P0 四条全部落地；2026-10-25 P1.7 依赖拓扑排序落地；2026-10-25 P1.5 生命周期事件+ModConfig 落地；2026-10-25 P1.6 网络本地通路代码落地）
+> 结论：**P0 + P1 全部落地（P1.6 部署待并行 Fabric WIP 收敛后随 fat jar 统一出包）**，可开始小规模试跑（事件监听类 mod、多 mod 依赖包、配置型 mod、简单网络 mod）。
 > 本文列出大规模测试前必须补齐的能力缺口，按优先级排序。文中"已具备"均以代码为准，不采信旧文档。
 
 ---
@@ -81,11 +81,15 @@
 - 配置系统：`ModConfig`（启动加载 `config/<modid>-<type>.toml`，缺失自动生成）+ `TomlConfigIO`（扁平键+单层 table+基础类型）+ `ModLoadingContext.registerConfig()` 注册入口；`Launcher` 在 mod 实例化前设置活跃 mod 供 `ModLoadingContext` 定位。
 - 事件类均无参构造，`postNeoLifecycle` 反射实例化后 post 全局 mod bus，`ModConfigEvent` 走 `Launcher.fireModConfigEvent` 携带 ModConfig 实例。
 
-#### 6. 网络包缺失
+#### 6. ~~网络包缺失~~ ✅ 代码已落地（2026-10-25，P1.6）
 
-**现状**：`SimpleChannel` / `NetworkChannel` 完全没有。
-
-**问题**：多人 mod、需要服务端-客户端同步的 mod 直接挂。
+**实现（本地通路）**：`net.neoforged.neoforge.network` 包——
+- **新 API**：`event.RegisterPayloadHandlersEvent`（`registrar("1")` → `registration.PayloadRegistrar`，`playToServer/playToClient/playBidirectional` 登记到 `ChannelRegistry`）+ `handling.IPayloadHandler` + `PacketDistributor.sendToServer/sendToPlayer/sendToAllPlayers`。
+- **旧 API**：`NetworkRegistry.newSimpleChannel(...)` + `SimpleChannel.messageBuilder(Class).encoder().decoder().consumerMainThread().add()` + `NetworkEvent.Context`（方向/sender/enqueueWork/setPacketHandled）+ `NetworkDirection`。
+- **派发语义**：单机单 JVM，消息对象直接传引用（StreamCodec/encoder/decoder 登记但不执行），`sendToServer` 直达服务端 handler、`sendToPlayer` 直达客户端 handler，方向不符时告警不崩。`enqueueWork` 当前线程立即执行。
+- **post 站点**：`Launcher` 在 InterModProcessEvent 后 post `RegisterPayloadHandlersEvent`。
+- **构建注意**：26.2 类文件签名带 jspecify 注解 + netty ByteBuf，模块 compileOnly 需补 `jspecify-1.0.0.jar` 与 netty-buffer/common；`compile-stub` 的 `Identifier` 镜像已补齐与 26.2 一致的静态工厂（parse/fromNamespaceAndPath/withDefaultNamespace/tryParse）。
+- **部署状态**：neoforge-compat 模块 clean build 全绿；fat jar 出包被并行会话的 Fabric 网络 WIP（fabric-compat / mirage-mixin 编译中）阻塞，待其收敛后随 fat jar 统一部署。
 
 #### 7. ~~NeoForge mod 依赖没有进入拓扑排序~~ ✅ 已完成（2026-10-25）
 
