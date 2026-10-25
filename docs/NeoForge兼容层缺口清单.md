@@ -89,7 +89,7 @@
 - **派发语义**：单机单 JVM，消息对象直接传引用（StreamCodec/encoder/decoder 登记但不执行），`sendToServer` 直达服务端 handler、`sendToPlayer` 直达客户端 handler，方向不符时告警不崩。`enqueueWork` 当前线程立即执行。
 - **post 站点**：`Launcher` 在 InterModProcessEvent 后 post `RegisterPayloadHandlersEvent`。
 - **构建注意**：26.2 类文件签名带 jspecify 注解 + netty ByteBuf，模块 compileOnly 需补 `jspecify-1.0.0.jar` 与 netty-buffer/common；`compile-stub` 的 `Identifier` 镜像已补齐与 26.2 一致的静态工厂（parse/fromNamespaceAndPath/withDefaultNamespace/tryParse）。
-- **部署状态**：neoforge-compat 模块 clean build 全绿；fat jar 出包被并行会话的 Fabric 网络 WIP（fabric-compat / mirage-mixin 编译中）阻塞，待其收敛后随 fat jar 统一部署。
+- **部署状态**：✅ 已部署（2026-10-25 18:07，备份 bak-20261025-p16）——fat jar 含 P1.6 网络类 17 个 + Launcher 的 RegisterPayloadHandlersEvent post + P1.5 配置类 + 并行会话 Fabric 网络类（共存无冲突）。
 
 #### 7. ~~NeoForge mod 依赖没有进入拓扑排序~~ ✅ 已完成（2026-10-25）
 
