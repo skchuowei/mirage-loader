@@ -309,27 +309,42 @@ public final class FabricNetworkingBridge {
 	// =====================================================================
 
 	public static void fireServerInit(ServerGamePacketListenerImpl listener, net.minecraft.server.MinecraftServer server) {
+		note("SERVER_PLAY_INIT");
 		ServerPlayConnectionEvents.INIT.invoker().onPlayInit(listener, server);
 	}
 
 	public static void fireServerJoin(ServerGamePacketListenerImpl listener, net.minecraft.server.MinecraftServer server) {
+		note("SERVER_PLAY_JOIN");
 		ServerPlayConnectionEvents.JOIN.invoker().onPlayReady(listener, serverSender(listener), server);
 	}
 
 	public static void fireServerDisconnect(ServerGamePacketListenerImpl listener) {
+		note("SERVER_PLAY_DISCONNECT");
 		ServerPlayConnectionEvents.DISCONNECT.invoker().onPlayDisconnect(listener, serverOf(listener));
 	}
 
 	public static void fireClientInit(ClientPacketListener listener) {
+		note("CLIENT_PLAY_INIT");
 		ClientPlayConnectionEvents.INIT.invoker().onPlayInit(listener, Minecraft.getInstance());
 	}
 
 	public static void fireClientJoin(ClientPacketListener listener) {
+		note("CLIENT_PLAY_JOIN");
 		ClientPlayConnectionEvents.JOIN.invoker().onPlayReady(listener, clientSender(listener), Minecraft.getInstance());
 	}
 
 	public static void fireClientDisconnect(ClientPacketListener listener) {
+		note("CLIENT_PLAY_DISCONNECT");
 		ClientPlayConnectionEvents.DISCONNECT.invoker().onPlayDisconnect(listener, Minecraft.getInstance());
+	}
+
+	/** 每类连接事件只在首次派发时打一行，留作"回调真的被调到"的证据，不随重连刷屏。 */
+	private static final Set<String> LOGGED = ConcurrentHashMap.newKeySet();
+
+	private static void note(String event) {
+		if (LOGGED.add(event)) {
+			MirageLog.MIXIN.info("[Fabric] " + event + " fired");
+		}
 	}
 
 	// =====================================================================

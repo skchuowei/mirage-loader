@@ -12,12 +12,21 @@
     "NeoServerLevelEntityJoinMixin",
     "NeoPlayerListMixin",
     "NeoCommandsMixin",
-    "NeoServerPlayerGameModeMixin"
+    "NeoServerPlayerGameModeMixin",
+    "FabricServerLifecycleMixin",
+    "FabricServerPayloadMixin",
+    "FabricServerPlayConnectionMixin"
   ],
   "client": [
     "CreativeModeInventoryScreenMixin",
     "NeoClientLevelTickMixin",
-    "NeoClientLevelEntityJoinMixin"
+    "NeoClientLevelEntityJoinMixin",
+    "FabricClientLevelTickMixin",
+    "FabricClientLifecycleMixin",
+    "FabricClientPayloadMixin",
+    "FabricClientPlayConnectionMixin",
+    "FabricClientTickMixin",
+    "FabricClientDisconnectMixin"
   ],
   "injectors": {
     "defaultRequire": 1

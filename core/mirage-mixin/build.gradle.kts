@@ -17,8 +17,16 @@ dependencies {
     compileOnly(rootProject.files("../mc-shili/libraries/com/mojang/brigadier/1.3.10/brigadier-1.3.10.jar"))
     compileOnly(rootProject.files("../mc-shili/libraries/it/unimi/dsi/fastutil/8.5.18/fastutil-8.5.18.jar"))
     compileOnly(rootProject.files("../mc-shili/libraries/com/mojang/datafixerupper/10.0.21/datafixerupper-10.0.21.jar"))
+    // Fabric networking mixin 经 FabricNetworkingBridge 间接引用 io.netty.channel.ChannelFutureListener
+    // （PacketSender.sendPacket 重载签名）；javac 读取桥类与 Connection 时需要 netty 在编译期可见。
+    compileOnly(rootProject.files("../mc-shili/libraries/io/netty/netty-common/4.2.15.Final/netty-common-4.2.15.Final.jar"))
+    compileOnly(rootProject.files("../mc-shili/libraries/io/netty/netty-buffer/4.2.15.Final/netty-buffer-4.2.15.Final.jar"))
+    compileOnly(rootProject.files("../mc-shili/libraries/io/netty/netty-transport/4.2.15.Final/netty-transport-4.2.15.Final.jar"))
+    compileOnly(rootProject.files("../mc-shili/libraries/io/netty/netty-codec-base/4.2.15.Final/netty-codec-base-4.2.15.Final.jar"))
     // NeoForge 游戏事件派发入口（运行时由 fat jar 提供，仅编译期可见）
     compileOnly(project(":modules:mirage-neoforge-compat"))
+    // Fabric 生命周期桥接入口（运行时由 fat jar 提供，仅编译期可见）
+    compileOnly(project(":modules:mirage-fabric-compat"))
 }
 
 // 本模块要直接引用 class 文件版本 69 的原版类（MC 26.2 基于 JDK 25），
