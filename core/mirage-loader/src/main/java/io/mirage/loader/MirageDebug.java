@@ -1,5 +1,7 @@
 package io.mirage.loader;
 
+import io.mirage.api.log.MirageLog;
+
 import java.lang.management.ManagementFactory;
 import java.lang.management.OperatingSystemMXBean;
 import java.lang.reflect.Method;
@@ -14,6 +16,8 @@ public final class MirageDebug {
 
     public static volatile String version = "Mirage v0.4.0";
     public static volatile String mcVersion = "MC 26.2";
+    /** 右下角版本号（早期窗口与原生 MC 窗口共用同一串，早期窗口启动时写入） */
+    public static volatile String versionLabel = "26.2-0.4.0";
     public static volatile String stage = "Starting ...";
     public static volatile String detail = "";
     public static volatile int progress = 0;
@@ -21,16 +25,21 @@ public final class MirageDebug {
     public static volatile int modTotal = 0;
     public static volatile String currentMod = "";
     public static volatile String modList = "";
+    /** 标题界面是否展开 Mod 列表 */
     public static volatile boolean showMods = false;
-    /** 所有初始化完成后设为 true，TitleScreen 上的调试面板据此隐藏 */
+    /** 标题界面是否展开详细调试面板 */
+    public static volatile boolean showPanel = false;
+    /** TitleScreen 出现后设为 true，加载遮罩上的调试卡片据此停止绘制 */
     public static volatile boolean loaded = false;
 
     /** Mod 命名空间列表（Launcher 发现 mod 时填充），用于 ASM 织入资源包暴露 */
     public static volatile java.util.List<String> modNamespaces = new java.util.ArrayList<>();
 
-    /** 最近日志行（最多 5 行） */
-    private static final Deque<String> recentLogs = new ArrayDeque<>(5);
+    /** HUD 日志节选（最近 8 行） */
+    private static final int LOG_CAPACITY = 8;
+    private static final Deque<String> recentLogs = new ArrayDeque<>(LOG_CAPACITY);
     private static final OperatingSystemMXBean osBean = ManagementFactory.getOperatingSystemMXBean();
+    private static volatile String lastLogLine = "";
 
     public static void setStage(String s) { stage = s; }
     public static void setProgress(int p) { progress = p; }
@@ -39,7 +48,6 @@ public final class MirageDebug {
     public static void setCurrentMod(String id) { currentMod = id; }
     public static void setModList(String s) { modList = s; }
     public static void setLoaded() { loaded = true; }
-    public static void toggleMods() { showMods = !showMods; }
 
     /**
      * ASM 织入 VanillaPackResourcesBuilder.build() 时调用。
@@ -50,7 +58,7 @@ public final class MirageDebug {
         try {
             Method expose = builder.getClass().getMethod("exposeNamespace", String[].class);
             expose.invoke(builder, (Object) modNamespaces.toArray(new String[0]));
-            System.out.println("[Mirage] 暴露 mod 命名空间: " + modNamespaces);
+            MirageLog.MIRAGE.debug("暴露 mod 命名空间: " + modNamespaces);
 
             java.lang.reflect.Method pushPath = null, pushRoot = null;
             for (Method m : builder.getClass().getDeclaredMethods()) {
@@ -61,39 +69,53 @@ public final class MirageDebug {
             if (pushRoot != null) pushRoot.setAccessible(true);
 
             // 关键：用方法签名中的参数类型，避免类加载器隔离导致的 argument type mismatch
-            Object clientResources = null;
+            Object clientResources = null, serverData = null;
             if (pushPath != null) {
                 Class<?> packTypeClass = pushPath.getParameterTypes()[0];
                 for (Object c : packTypeClass.getEnumConstants()) {
-                    if (((Enum<?>) c).name().equals("CLIENT_RESOURCES")) clientResources = c;
+                    String name = ((Enum<?>) c).name();
+                    if (name.equals("CLIENT_RESOURCES")) clientResources = c;
+                    else if (name.equals("SERVER_DATA")) serverData = c;
                 }
                 if (clientResources == null) clientResources = packTypeClass.getEnumConstants()[0];
             }
-            System.out.println("[Mirage] 资源包类型: " + clientResources);
+            // P1-5：同时解析 SERVER_DATA 包类型，用于注册 mod 的 data/（配方/战利品/标签）
+            MirageLog.MIRAGE.debug("资源包类型: clientResources=" + clientResources + ", serverData=" + serverData);
 
             for (String modId : modNamespaces) {
                 try {
                     java.nio.file.Path modJar = findModJar(modId);
                     if (modJar == null) {
-                        System.out.println("[Mirage] 跳过 mod 资源（mods 目录里没有该命名空间的 jar）: " + modId);
+                        MirageLog.MIRAGE.debug("跳过 mod 资源（mods 目录里没有该命名空间的 jar）: " + modId);
                         continue;
                     }
                     java.nio.file.Path extractDir = java.nio.file.Files.createTempDirectory("mirage-" + modId);
                     extractAssets(modJar, extractDir);
                     java.nio.file.Path assetRoot = extractDir.resolve("assets");
-                    if (java.nio.file.Files.exists(assetRoot)) {
-                        if (pushRoot != null) pushRoot.invoke(builder, extractDir);
-                        if (pushPath != null) pushPath.invoke(builder, clientResources, assetRoot);
-                        System.out.println("[Mirage] 已添加 mod 资源: " + modId + " -> " + extractDir);
-                    } else {
-                        System.out.println("[Mirage] 跳过 mod 资源（jar 内没有 assets 目录）: " + modId);
+                    java.nio.file.Path dataRoot = extractDir.resolve("data");
+                    boolean hasAssets = java.nio.file.Files.exists(assetRoot);
+                    boolean hasData = java.nio.file.Files.exists(dataRoot);
+                    if (!hasAssets && !hasData) {
+                        MirageLog.MIRAGE.debug("跳过 mod 资源（jar 内没有 assets/data 目录）: " + modId);
+                        continue;
                     }
+                    // P1-5：整目录作为根，使 assets/ 与 data/ 同时可见；再按类型显式 push
+                    if (pushRoot != null) pushRoot.invoke(builder, extractDir);
+                    if (hasAssets && pushPath != null && clientResources != null) {
+                        pushPath.invoke(builder, clientResources, assetRoot);
+                    }
+                    if (hasData && pushPath != null && serverData != null) {
+                        // data/ 作为 SERVER_DATA 注册：配方/战利品表/标签/advancements 等进入数据包管线
+                        pushPath.invoke(builder, serverData, dataRoot);
+                    }
+                    MirageLog.MIRAGE.debug("已添加 mod 资源: " + modId
+                            + " assets=" + hasAssets + " data=" + hasData + " -> " + extractDir);
                 } catch (Exception e) {
-                    System.err.println("[Mirage] 添加失败: " + modId + ": " + e);
+                    MirageLog.MIRAGE.warn("添加 mod 资源失败: " + modId, e);
                 }
             }
         } catch (Exception e) {
-            System.err.println("[Mirage] 暴露命名空间失败: " + e);
+            MirageLog.MIRAGE.warn("暴露 mod 命名空间失败（mod 资源可能不入包）", e);
         }
     }
 
@@ -135,9 +157,9 @@ public final class MirageDebug {
                     }
                 }
             }
-            System.out.println("[Mirage] 扫描 assets 命名空间: " + ASSET_PACKS.keySet());
+            MirageLog.MIRAGE.debug("扫描 assets 命名空间: " + ASSET_PACKS.keySet());
         } catch (Exception e) {
-            System.err.println("[Mirage] 扫描 assets 命名空间失败: " + e);
+            MirageLog.MIRAGE.warn("扫描 assets 命名空间失败（mod 资源可能不入包）", e);
         }
     }
 
@@ -146,7 +168,9 @@ public final class MirageDebug {
             java.util.Enumeration<? extends java.util.zip.ZipEntry> e = zf.entries();
             while (e.hasMoreElements()) {
                 java.util.zip.ZipEntry entry = e.nextElement();
-                if (!entry.getName().startsWith("assets/")) continue;
+                String name = entry.getName();
+                // P1-5：同时解压 assets/ 与 data/。data/ 稍后作为 SERVER_DATA 注册进数据包管线
+                if (!name.startsWith("assets/") && !name.startsWith("data/")) continue;
                 java.nio.file.Path out = dest.resolve(entry.getName());
                 if (entry.isDirectory()) {
                     java.nio.file.Files.createDirectories(out);
@@ -160,24 +184,75 @@ public final class MirageDebug {
         }
     }
 
-    /** 添加一行日志 */
+    /**
+     * 添加一行日志（节选：只留 Mirage 自身与错误/告警）。
+     * Launcher 的 stdout tee 与 HUD 共用，保持最近 8 行。
+     */
     public static void log(String line) {
+        if (line == null) return;
+        String s = line.strip();
+        if (s.isEmpty() || s.length() > 200) {
+            if (s.length() > 200) s = s.substring(0, 200);
+            else return;
+        }
+        if (!isImportantLog(s)) return;
         synchronized (recentLogs) {
-            if (recentLogs.size() >= 5) recentLogs.pollFirst();
-            recentLogs.addLast(line);
+            if (s.equals(lastLogLine)) return;
+            lastLogLine = s;
+            if (recentLogs.size() >= LOG_CAPACITY) recentLogs.pollFirst();
+            recentLogs.addLast(s);
         }
     }
 
+    /**
+     * HUD 节选的准入判断。
+     *
+     * <p>行首可能带 log4j 前缀（{@code [14:54:14] [main/INFO]: [STDOUT]: }），所以只能用
+     * {@code contains} 而不是 {@code startsWith}。前缀清单必须与 {@link MirageLog} 里定义的
+     * 通道保持一致——新增通道时这里要同步，否则该通道的日志不会出现在 HUD 上。
+     */
+    private static final String[] KNOWN_PREFIXES = {
+            "[Mirage", "[LS]", "[Loader]", "[MidCache]", "[Mirage-Mixin]"
+    };
+
+    private static boolean isImportantLog(String s) {
+        for (String p : KNOWN_PREFIXES) {
+            if (s.contains(p)) return true;
+        }
+        return s.contains("ERROR") || s.contains("WARN")
+                || s.contains("Exception") || s.contains("Caused by")
+                || s.contains("失败") || s.contains("错误");
+    }
+
+    /** 进程 CPU 占用（0~100），取不到时退化为系统负载 */
+    public static int cpuPercent() {
+        try {
+            if (osBean instanceof com.sun.management.OperatingSystemMXBean sun) {
+                double v = sun.getProcessCpuLoad();
+                if (v < 0) v = sun.getCpuLoad();
+                if (v >= 0) return (int) Math.round(Math.min(1.0, v) * 100);
+            }
+        } catch (Throwable ignored) {
+        }
+        double avg = osBean.getSystemLoadAverage();
+        if (avg < 0) return 0;
+        return (int) Math.round(Math.min(1.0, avg / Math.max(1, osBean.getAvailableProcessors())) * 100);
+    }
+
+    public static long memUsedMB() {
+        return (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / (1024 * 1024);
+    }
+
+    public static long memMaxMB() {
+        return Runtime.getRuntime().maxMemory() / (1024 * 1024);
+    }
+
     public static String memLine() {
-        long usedMB = (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) / (1024*1024);
-        long maxMB = Runtime.getRuntime().maxMemory() / (1024*1024);
-        return "Memory: " + usedMB + "/" + maxMB + " MB (" + (usedMB*100/Math.max(1,maxMB)) + "%)";
+        return "mem " + memUsedMB() + "/" + memMaxMB() + " MB";
     }
 
     public static String cpuLine() {
-        double cpu = osBean.getSystemLoadAverage();
-        if (cpu < 0) cpu = 0;
-        return String.format("CPU: %.1f%%", cpu * 100);
+        return "cpu " + cpuPercent() + "%";
     }
 
     public static String stageLine() {
@@ -223,13 +298,13 @@ public final class MirageDebug {
         if (gge == null || text == null) return;
         if (font == null) {
             if ((diagCounter++ & 63) == 0) {
-                System.out.println("[Mirage] drawTextSafe: font==null, skip \"" + text + "\" (n=" + diagCounter + ")");
+                MirageLog.MIRAGE.trace("drawTextSafe: font==null, skip \"" + text + "\"");
             }
             return;
         }
         if (!fontReportedNonNull) {
             fontReportedNonNull = true;
-            System.out.println("[Mirage] 绘制文本: 字体已就绪! 字体类=" + font.getClass().getName()
+            MirageLog.MIRAGE.debug("绘制文本: 字体已就绪 字体类=" + font.getClass().getName()
                 + " ggeClass=" + gge.getClass().getName() + " text=\"" + text + "\"");
         }
         if (!methodResolved) {
@@ -243,11 +318,11 @@ public final class MirageDebug {
                     }
                 }
             }
-            System.out.println("[Mirage] 绘制文本: 解析到方法 = " + cachedText);
+            MirageLog.MIRAGE.debug("绘制文本: 解析到方法 = " + cachedText);
         }
         if (cachedText == null) {
             if ((diagCounter++ & 63) == 0) {
-                System.out.println("[Mirage] 绘制文本: 在该类上未找到方法: " + gge.getClass());
+                MirageLog.MIRAGE.debug("绘制文本: 在该类上未找到方法: " + gge.getClass());
             }
             return;
         }
@@ -255,9 +330,266 @@ public final class MirageDebug {
             cachedText.invoke(gge, font, text, x, y, color);
         } catch (Throwable t) {
             if ((diagCounter++ & 63) == 0) {
-                System.out.println("[Mirage] 绘制文本调用失败: " + t);
+                MirageLog.MIRAGE.warn("绘制文本调用失败", t);
             }
         }
+    }
+
+    // =====================================================================
+    //  Fabric 式启动 GUI：不建任何独立窗口，全部画在 MC 原版 GUI 上
+    //
+    //  · LoadingOverlay（资源重载期）：左上角调试卡片 + 进度条。
+    //    绝对禁止调用 gge.text()——会提前触发 gui_text 管线，26.2 重载期
+    //    core/text shader 尚未就绪，会导致管线永久失败。这里改为：
+    //    AWT 把文字光栅化成像素块，再用 gge.fill() 逐段绘制，只依赖 gui 管线。
+    //  · TitleScreen：左上角 Mirage 徽标 + Mods 按钮，点击开合详情面板/Mod 列表。
+    // =====================================================================
+
+    /** 标题界面出现时由 ASM 织入的 TitleScreen.init() 调用 */
+    public static void onTitleScreenShown() {
+        loaded = true;
+    }
+
+    private static volatile Method cachedFill;
+    private static volatile Method cachedGuiWidth;
+    private static volatile Method cachedGuiHeight;
+
+    /** 解析 GuiGraphicsExtractor.fill(IIIII)V（编译期没有 MC jar，只能反射） */
+    static Method fillMethod(Object gge) throws NoSuchMethodException {
+        Method m = cachedFill;
+        if (m == null || !m.getDeclaringClass().isAssignableFrom(gge.getClass())) {
+            m = gge.getClass().getMethod("fill", int.class, int.class, int.class, int.class, int.class);
+            cachedFill = m;
+        }
+        return m;
+    }
+
+    static int guiSize(Object gge, boolean width) {
+        try {
+            Method m = width ? cachedGuiWidth : cachedGuiHeight;
+            if (m == null) {
+                m = gge.getClass().getMethod(width ? "guiWidth" : "guiHeight");
+                if (width) cachedGuiWidth = m;
+                else cachedGuiHeight = m;
+            }
+            Object v = m.invoke(gge);
+            if (v instanceof Integer i) return i;
+        } catch (Throwable ignored) {
+        }
+        return width ? 320 : 240;
+    }
+
+    static void fillRect(Object gge, Method fill, int x1, int y1, int x2, int y2, int color) {
+        try {
+            fill.invoke(gge, x1, y1, x2, y2, color);
+        } catch (Throwable t) {
+            if ((diagCounter++ & 255) == 0) {
+                MirageLog.MIRAGE.trace("fill 调用失败", t);
+            }
+        }
+    }
+
+    // ---- 像素字：AWT 光栅化 + fill 绘制，绕开 Font/gui_text 管线 ----
+    private static final java.util.Map<String, int[]> PIXEL_TEXT_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
+    private static volatile boolean pixelTextUnavailable;
+
+    /** HUD 用的像素字体（12px 微软雅黑）；Forge 风格界面用 Monocraft，见 ForgeStyleOverlay */
+    private static final java.awt.Font HUD_FONT =
+            new java.awt.Font("Microsoft YaHei", java.awt.Font.PLAIN, 12);
+
+    /** 返回 [宽, 高, x, y, w, h, ...]，每个四元组是一段可合并的像素矩形 */
+    static int[] rasterizePixelText(String text, java.awt.Font font) {
+        java.awt.image.BufferedImage probe =
+                new java.awt.image.BufferedImage(1, 1, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        java.awt.Graphics2D pg = probe.createGraphics();
+        pg.setFont(font);
+        java.awt.FontMetrics fm = pg.getFontMetrics();
+        int width = Math.max(1, fm.stringWidth(text));
+        int height = Math.max(1, fm.getAscent() + fm.getDescent());
+        pg.dispose();
+
+        java.awt.image.BufferedImage img =
+                new java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        java.awt.Graphics2D g = img.createGraphics();
+        g.setFont(font);
+        g.setColor(java.awt.Color.WHITE);
+        g.setRenderingHint(java.awt.RenderingHints.KEY_TEXT_ANTIALIASING,
+                java.awt.RenderingHints.VALUE_TEXT_ANTIALIAS_OFF);
+        g.drawString(text, 0, fm.getAscent());
+        g.dispose();
+
+        java.util.List<int[]> quads = new java.util.ArrayList<>();
+        java.util.List<Integer> prevRow = new java.util.ArrayList<>();
+        for (int yy = 0; yy < height; yy++) {
+            java.util.List<Integer> curRow = new java.util.ArrayList<>();
+            int start = -1;
+            for (int xx = 0; xx <= width; xx++) {
+                boolean on = xx < width && ((img.getRGB(xx, yy) >>> 24) >= 80);
+                if (on && start < 0) {
+                    start = xx;
+                } else if (!on && start >= 0) {
+                    int len = xx - start;
+                    boolean merged = false;
+                    for (int idx : prevRow) {
+                        int[] q = quads.get(idx);
+                        if (q[0] == start && q[2] == len) {
+                            q[3]++;
+                            curRow.add(idx);
+                            merged = true;
+                            break;
+                        }
+                    }
+                    if (!merged) {
+                        quads.add(new int[]{start, yy, len, 1});
+                        curRow.add(quads.size() - 1);
+                    }
+                    start = -1;
+                }
+            }
+            prevRow = curRow;
+        }
+
+        int[] out = new int[2 + quads.size() * 4];
+        out[0] = width;
+        out[1] = height;
+        int i = 2;
+        for (int[] q : quads) {
+            out[i++] = q[0];
+            out[i++] = q[1];
+            out[i++] = q[2];
+            out[i++] = q[3];
+        }
+        return out;
+    }
+
+    private static int[] pixelMask(String text) {
+        int[] mask = PIXEL_TEXT_CACHE.get(text);
+        if (mask == null) {
+            if (PIXEL_TEXT_CACHE.size() > 128) PIXEL_TEXT_CACHE.clear();
+            mask = rasterizePixelText(text, HUD_FONT);
+            PIXEL_TEXT_CACHE.put(text, mask);
+        }
+        return mask;
+    }
+
+    private static void pixelText(Object gge, Method fill, String text, int x, int y, int color, int maxWidth) {
+        if (text == null || text.isEmpty() || pixelTextUnavailable) return;
+        try {
+            int[] mask = pixelMask(text);
+            int limit = Math.min(mask[0], maxWidth);
+            for (int i = 2; i + 3 < mask.length; i += 4) {
+                int rx = mask[i];
+                if (rx >= limit) continue;
+                int ry = mask[i + 1];
+                int rw = mask[i + 2];
+                int rh = mask[i + 3];
+                if (rx + rw > limit) rw = limit - rx;
+                fillRect(gge, fill, x + rx, y + ry, x + rx + rw, y + ry + rh, color);
+            }
+        } catch (Throwable t) {
+            pixelTextUnavailable = true;
+            MirageLog.MIRAGE.warn("像素字不可用，后续只画进度条", t);
+        }
+    }
+
+    // HUD 调色板：贴近原版 F3 调试屏，不用装饰性配色
+    private static final int HUD_BG = 0xB4000000;
+    private static final int HUD_LINE = 0xFF3C3C3C;
+    private static final int HUD_WHITE = 0xFFFFFFFF;
+    private static final int HUD_GRAY = 0xFFAAAAAA;
+    private static final int HUD_DIM = 0xFF777777;
+    private static final int HUD_GREEN = 0xFF55FF55;
+    private static final int HUD_YELLOW = 0xFFFFFF55;
+    private static final int HUD_RED = 0xFFFF5555;
+
+    private static int logColor(String line) {
+        if (line.contains("ERROR") || line.contains("Exception")
+                || line.contains("失败") || line.contains("错误")) return HUD_RED;
+        if (line.contains("WARN")) return HUD_YELLOW;
+        return HUD_DIM;
+    }
+
+    /**
+     * ASM 在 LoadingOverlay.extractRenderState 每个 RETURN 前调用。
+     *
+     * <p>原生 MC 窗口的加载界面改为「Forge 式」——与早期窗口同一套布局
+     * （红底 / 内存条 / 两条进度条 / 右下版本号，无铁砧动画），
+     * 由 {@link ForgeStyleOverlay} 绘制。
+     */
+    public static void drawLoadingOverlay(Object overlay, Object gge) {
+        ForgeStyleOverlay.draw(overlay, gge);
+    }
+
+    /** ASM 在 TitleScreen.extractRenderState 每个 RETURN 前调用 */
+    public static void drawTitleOverlay(Object gge, Object font) {
+        if (gge == null) return;
+        try {
+            Method fill = fillMethod(gge);
+            // 左上角徽标（朴素 HUD 条，无装饰线）
+            fillRect(gge, fill, 5, 5, 196, 19, HUD_BG);
+            drawTextSafe(gge, font, version + "  //  " + modCount + " mods", 9, 8, HUD_GREEN);
+            // Mods 按钮
+            fillRect(gge, fill, 199, 5, 236, 19, showMods ? 0xFF2A4A2A : 0xFF2A2A2A);
+            drawTextSafe(gge, font, "Mods", 204, 8, showMods ? HUD_GREEN : HUD_WHITE);
+
+            if (showPanel) {
+                int gw = guiSize(gge, true);
+                int w = Math.min(360, Math.max(220, gw - 10));
+                fillRect(gge, fill, 5, 23, 5 + w, 173, HUD_BG);
+                drawTextSafe(gge, font, version + "  //  " + mcVersion, 9, 28, HUD_GREEN);
+                drawTextSafe(gge, font, stageLine(), 9, 42, HUD_WHITE);
+                drawTextSafe(gge, font, modLine() + "   " + progressLine(), 9, 56, HUD_GRAY);
+                drawTextSafe(gge, font, cpuLine() + "   " + memLine(), 9, 70, HUD_GRAY);
+                fillRect(gge, fill, 9, 84, 9 + w - 8, 86, 0xFF2A2A2A);
+                int bw = (int) Math.round((w - 16) * Math.max(0, Math.min(100, progress)) / 100.0);
+                if (bw > 0) fillRect(gge, fill, 9, 84, 9 + bw, 86, HUD_GREEN);
+                fillRect(gge, fill, 9, 90, 9 + w - 8, 91, HUD_LINE);
+                String[] logs = recentLogLines();
+                int start = Math.max(0, logs.length - 5);
+                for (int i = start; i < logs.length; i++) {
+                    drawTextSafe(gge, font, logs[i], 9, 95 + (i - start) * 12, logColor(logs[i]));
+                }
+                drawTextSafe(gge, font, "click to close", 9, 158, HUD_DIM);
+            }
+            if (showMods) {
+                int gw = guiSize(gge, true);
+                int gh = guiSize(gge, false);
+                fillRect(gge, fill, 0, 0, gw, gh, 0xE0000000);
+                drawTextSafe(gge, font, "MIRAGE // MODS", 20, 20, HUD_GREEN);
+                drawTextSafe(gge, font, modCount + " loaded   " + progress + "%", 20, 34, HUD_GRAY);
+                String[] ids = modListLine().split(", ");
+                for (int i = 0; i < ids.length && i < 12; i++) {
+                    drawTextSafe(gge, font, "- " + ids[i], 20, 52 + i * 12, HUD_WHITE);
+                }
+                drawTextSafe(gge, font, version + "  //  " + mcVersion, 20, gh - 32, HUD_GRAY);
+                drawTextSafe(gge, font, "click to close", 20, gh - 18, HUD_DIM);
+            }
+        } catch (Throwable t) {
+            if ((diagCounter++ & 63) == 0) {
+                MirageLog.MIRAGE.warn("绘制标题界面 HUD 失败", t);
+            }
+        }
+    }
+
+    /**
+     * ASM 在 TitleScreen.mouseClicked(MouseButtonEvent, boolean) 开头调用。
+     * 返回 true 表示这次点击已被 Mirage 消费。
+     */
+    public static boolean handleTitleClick(double mouseX, double mouseY) {
+        if (showPanel || showMods) {
+            showPanel = false;
+            showMods = false;
+            return true;
+        }
+        if (mouseX >= 5 && mouseX <= 196 && mouseY >= 5 && mouseY <= 19) {
+            showPanel = true;
+            return true;
+        }
+        if (mouseX >= 199 && mouseX <= 236 && mouseY >= 5 && mouseY <= 19) {
+            showMods = true;
+            return true;
+        }
+        return false;
     }
 
     // =====================================================================
@@ -307,9 +639,9 @@ public final class MirageDebug {
             f_tabType.setAccessible(true);
             // 枚举初始化延后到真正需要的时候再做，避免提前触发静态块
             tabReflectReady = true;
-            System.out.println("[Mirage] 标签页反射就绪（延迟初始化，不触发静态块）");
+            MirageLog.MIRAGE.debug("标签页反射就绪（延迟初始化，不触发静态块）");
         } catch (Throwable t) {
-            System.err.println("[Mirage] 标签页反射初始化失败，直接回退单页: " + t);
+            MirageLog.MIRAGE.warn("标签页反射初始化失败，回退单页（不启用分页）", t);
             tabReflectReady = false;
             totalPages = 1; // 反射失败时彻底关闭分页，不画翻页按钮，不干预原版逻辑
         }
@@ -339,13 +671,13 @@ public final class MirageDebug {
                     int col = f_tabColumn.getInt(tab);
                     if (col > maxCol) maxCol = col;
                 } catch (Throwable inner) {
-                    System.err.println("[Mirage] 标签页检查失败: " + inner);
+                    MirageLog.MIRAGE.debug("标签页检查失败", inner);
                 }
             }
             totalPages = Math.max(1, (maxCol + TABS_PER_PAGE) / TABS_PER_PAGE);
-            System.out.println("[Mirage] 重建标签页: 最大列=" + maxCol + " totalPages=" + totalPages);
+            MirageLog.MIRAGE.debug("重建标签页: 最大列=" + maxCol + " totalPages=" + totalPages);
         } catch (Throwable t) {
-            System.err.println("[Mirage] 重建标签页失败，回退单页: " + t);
+            MirageLog.MIRAGE.warn("重建标签页失败，回退单页（不启用分页）", t);
             totalPages = 1; // 失败时彻底关闭分页，不要强制2页
         }
     }
@@ -409,7 +741,7 @@ public final class MirageDebug {
     public static void flipPage(int dir) {
         if (totalPages <= 1) return;
         tabPage = ((tabPage + dir) % totalPages + totalPages) % totalPages;
-        System.out.println("[Mirage] 标签页 -> " + tabPage + "/" + totalPages);
+        MirageLog.MIRAGE.debug("标签页 -> " + tabPage + "/" + totalPages);
     }
 
     // ---- 翻页按钮屏幕区域（相对 GUI 左上角 leftPos/topPos 的偏移） ----
@@ -456,7 +788,7 @@ public final class MirageDebug {
             }
         } catch (Throwable t) {
             if ((diagCounter++ & 63) == 0) {
-                System.err.println("[Mirage] 绘制翻页控件失败: " + t);
+                MirageLog.MIRAGE.warn("绘制翻页控件失败", t);
             }
         }
     }
