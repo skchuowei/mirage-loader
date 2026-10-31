@@ -33,4 +33,7 @@
 - **MSR 超时是 best-effort（`interrupt`），不承诺硬杀**：`join(2000)` 超时后 `interrupt`，拦得住 `sleep/wait` 等可中断阻塞；纯 CPU 自旋或不可中断 IO 的线程会作为 daemon 残留到进程结束（Java 25 已无 `Thread.stop`）。此类 mod 记 `incomplete=true`，**半成品数据一律不写缓存**。
 - **`incomplete` 的 mod 每次启动都会重录（最坏 2 s/个）**：半成品不入库换来的是"下次再试"，代价是每次启动重付一次熔断时间。P2「fake pass 按需化 + 被动捕获」落地后这项才消失。
 - **fake 表面变更会让 `.mid-cache` 里的 `recorded` 全量作废一次**：`Entry.fakeVersion` 校对只在 `recorded != null` 时生效，所以 fake 类增删改后首次启动会把所有 neo mod 重录一遍（N × ≤2 s），之后恢复命中。这是刻意设计（宁可重录，也不要用与现实不符的录制数据）。
+- **被动捕获只看得见"自己的入口"，看不见 mod 直接调 MC 原版方法（MSR P2 边界，2026-10-31）**：`PassiveRecorder` 的挂点全在自有代码里（`io.mirage.api.*` / `DeferredRegister` / `EventBus` / `NeoEventBusImpl` / `ModLoadingContext`）。mod 在构造里直接写 `level.addFreshEntity(...)` / `BuiltInRegistries.X.register(...)` 时，被动侧**看不到**——那需要字节码插桩（roadmap P3）。后果：被动 `touched_apis` 天然比沙盒（fake 表面全量）窄，`MidCache.merge` 因此取并集而不是覆盖。**不要**把被动结果当"完整 API 面"用。
+- **`net.neoforged.fml.loading.FMLLoader` 只实现了 `versionInfo()`（MSR P2）**：`VersionInfo` 的 `mcVersion/majorMcVersion/neoForgeVersion/fmlVersion/mavenVersion/buildNumber` 可用且按 mod 上下文伪装；`FMLLoader.getDist()/getGamePath()/getModsPath()/isProduction()` **没有实现**，调到会抛 `NoSuchMethodError`。这是故意的——宁可在日志里看到一个明确的缺失方法名，也不要返回编造的假值让 mod 走错分支。
+- **`.mid-cache` schema 升版会让整库重识别一次**：`lookup` 现在要求 `specVersion == "0.4"`，老条目（0.1/0.2/0.3）一律视为未命中。重识别 = ASM 扫 class（秒级），**不**触发 fake pass（区间完整的 mod 按 P2 判据直接跳过），因此这次升版不会再出现"每个 mod 2 秒"的代价。
 

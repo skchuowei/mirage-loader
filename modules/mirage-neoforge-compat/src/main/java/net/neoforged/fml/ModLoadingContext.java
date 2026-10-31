@@ -1,5 +1,6 @@
 package net.neoforged.fml;
 
+import io.mirage.api.hook.PassiveHooks;
 import io.mirage.api.log.MirageLog;
 
 import net.neoforged.fml.config.ConfigData;
@@ -57,6 +58,8 @@ public final class ModLoadingContext {
     /** 显式指定 modId 注册配置。 */
     public ModConfig registerConfig(ModConfig.Type type, IConfigSpec spec, String fileName, String modId) {
         String id = (modId == null || modId.isEmpty()) ? "mirage" : modId;
+        // MSR P2 被动捕获：配置注册是 mod 构造期最典型的 API 触达之一
+        PassiveHooks.api("net.neoforged.fml.ModLoadingContext.registerConfig");
         Path fullPath = configDir.resolve(fileName);
         Map<String, Object> parsed;
         try {

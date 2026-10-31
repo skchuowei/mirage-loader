@@ -52,8 +52,14 @@ public final class DiscoveryStage implements Stage {
             io.mirage.loader.MirageDebug.setProgress(8);
 
             MidCache midCache = new MidCache(gameDir, LifecycleStarter.MC_VERSION);
+            // S6 的被动捕获（MSR P2）要把录制结果写回同一份缓存，因此必须跨阶段共享
+            ctx.properties().put("S1.midCache", midCache);
             List<ModContainer> mods = new Loader().discoverMods(gameDir, midCache,
                     ctx.midCacheForceRegen(), ctx.midCacheVerbose(), ctx.sandboxMode());
+
+            // MSR P2 版本伪装：按各 mod 声明的版本区间登记"它该看到的版本"，
+            // 必须在 S6 构造 mod 之前装好（mod 构造函数里就会查版本）。
+            io.mirage.loader.masq.LoaderVersionMasquerade.installAll(mods, LifecycleStarter.MC_VERSION);
 
             if (ctx.mode() == LifecycleMode.C1) {
                 mods = filterNativeOnly(mods);

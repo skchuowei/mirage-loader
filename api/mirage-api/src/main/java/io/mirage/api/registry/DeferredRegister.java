@@ -3,6 +3,7 @@ package io.mirage.api.registry;
 import io.mirage.api.event.Event;
 import io.mirage.api.event.ModConstructEvent;
 import io.mirage.api.event.ModInitEvent;
+import io.mirage.api.hook.PassiveHooks;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -82,6 +83,9 @@ public final class DeferredRegister<T> {
     }
 
     public static <T> DeferredRegister<T> create(Class<T> type, String modId) {
+        // MSR P2 被动捕获：真实加载时记一笔（沙盒模式下由 Sink 另行记录）
+        PassiveHooks.api("io.mirage.api.registry.DeferredRegister.create");
+        PassiveHooks.deferredRegister();
         return new DeferredRegister<>(type, modId);
     }
 
@@ -90,6 +94,7 @@ public final class DeferredRegister<T> {
      * 其 {@link RegistryObject#get()} 在注册完成前不可用。
      */
     public RegistryObject<T> register(String name, Supplier<T> supplier) {
+        PassiveHooks.api("io.mirage.api.registry.DeferredRegister.register");
         // NeoForge 兼容：register(bus) 后仍允许动态追加条目（如 ModBlocks.registerBlockItem
         // 在 ModItems.ITEMS 已挂总线后追加 BlockItem）。flush 在所有 mod 构造完之后统一跑，
         // 此时追加的条目仍会被 flush 看到。
@@ -107,6 +112,7 @@ public final class DeferredRegister<T> {
     public void register() {
         if (hooked) return;
         hooked = true;
+        PassiveHooks.api("io.mirage.api.registry.DeferredRegister.register()");
         // 挂接动作通过全局 backend 完成；此处只把 entries 交给 backend。
         // 加载器在 M5 bootstrap 时会遍历所有 DeferredRegister 并调用 flush()。
         DeferredRegisterHooks.onHook(this);

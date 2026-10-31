@@ -1,6 +1,7 @@
 package io.mirage.eventbus;
 
 import io.mirage.api.SubscribeEvent;
+import io.mirage.api.hook.PassiveHooks;
 import io.mirage.api.log.MirageLog;
 
 import java.lang.reflect.Method;
@@ -17,9 +18,12 @@ public class EventBus {
     private final Map<Object, List<Method>> ownerMethods = new ConcurrentHashMap<>();
 
     public void register(Object listener) {
+        // MSR P2 被动捕获：窗口外 no-op，窗口内记「注册了哪些事件类型」
+        PassiveHooks.api("io.mirage.eventbus.EventBus.register");
         for (Method m : listener.getClass().getDeclaredMethods()) {
             if (m.isAnnotationPresent(SubscribeEvent.class) && m.getParameterCount() == 1) {
                 Class<?> eventType = m.getParameterTypes()[0];
+                PassiveHooks.event(eventType.getName());
                 m.setAccessible(true);
                 listeners.computeIfAbsent(eventType, k -> new ArrayList<>()).add(m);
                 ownerMethods.computeIfAbsent(listener, k -> new ArrayList<>()).add(m);

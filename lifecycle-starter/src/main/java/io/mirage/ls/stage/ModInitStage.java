@@ -7,10 +7,13 @@ import io.mirage.api.event.ModPostInitEvent;
 import io.mirage.api.event.ModPreInitEvent;
 import io.mirage.api.log.MirageLog;
 import io.mirage.api.registry.DeferredRegister;
+import io.mirage.api.version.VersionMasks;
 import io.mirage.eventbus.EventBus;
+import io.mirage.loader.MidCache;
 import io.mirage.loader.ModContainer;
 import io.mirage.loader.MirageClassLoader;
 import io.mirage.loader.MirageDebug;
+import io.mirage.loader.passive.PassiveRecorder;
 import io.mirage.ls.LifecycleContext;
 import io.mirage.ls.Stage;
 import io.mirage.ls.StageOutcome;
@@ -68,6 +71,9 @@ public final class ModInitStage implements Stage {
             RegistryWindow window = StageSupport.get(ctx, "S4.registryWindow");
             List<DeferredRegister<?>> pendingRegisters = StageSupport.get(ctx, "S4.pendingRegisters");
             Dist dist = ctx.dist();
+            // MSR P2：S6 的被动捕获把结果写回 S1 建的同一份缓存。缺失不致命（顶多不落盘），
+            // 因此不用 StageSupport.get —— 那会因缺 key 直接 FATAL 整个启动。
+            MidCache cache = (MidCache) ctx.properties().get("S1.midCache");
 
             // 失败清单：id(摘要)，阶段末尾统一播报
             List<String> failures = new ArrayList<>();
@@ -108,6 +114,11 @@ public final class ModInitStage implements Stage {
                 MirageDebug.setProgress(modProgress);
 
                 // ---- main 侧 ----
+                // MSR P2 被动捕获：本 mod 的全部入口（main + side）都算在它头上。
+                // 上一轮若因异常提前跳出而遗留窗口，这里先收掉（防御，正常不会发生）。
+                if (PassiveRecorder.active()) PassiveRecorder.end();
+                PassiveRecorder.begin(mod.manifest.id);
+                VersionMasks.enter(mod.manifest.id);
                 for (String clsName : mainClasses) {
                     MirageLog.MIRAGE.info("初始化 mod (" + modIdx + "/" + modTotal + "): "
                             + mod.manifest.id + " -> " + clsName);
@@ -127,6 +138,7 @@ public final class ModInitStage implements Stage {
                         eventBus.post(new ModInitEvent(mod.manifest.id));
                         MirageDebug.setModCount(modIdx);
                     } catch (Throwable t) {
+                        PassiveRecorder.markFailure(clsName);
                         failures.add(describeFailure(mod, t));
                         MirageLog.MIRAGE.error("初始化 mod " + mod.manifest.id + " (" + clsName
                                 + ") 失败——该 mod 的功能将不可用，游戏继续启动", t);
@@ -153,6 +165,7 @@ public final class ModInitStage implements Stage {
                                 }
                             }
                         } catch (Throwable t) {
+                            PassiveRecorder.markFailure(clsName);
                             failures.add(describeFailure(mod, t));
                             MirageLog.MIRAGE.error("调用 server entrypoint " + clsName + " 失败", t);
                         }
@@ -174,12 +187,22 @@ public final class ModInitStage implements Stage {
                             }
                         }
                     } catch (Throwable t) {
+                        PassiveRecorder.markFailure(clsName);
                         failures.add(describeFailure(mod, t));
                         MirageLog.MIRAGE.error("调用 client entrypoint " + clsName + " 失败", t);
                     }
                 }
+                // MSR P2：收窗口 → 与磁盘上的旧录制做二启 diff → 合并入库（不完整的丢弃）
+                VersionMasks.leave();
+                archivePassive(cache, mod);
             }
             MirageDebug.setCurrentMod("");
+            // 被动捕获汇总：一行看清本轮捕了多少、丢了多少（丢 = 有入口失败，半成品不入库）
+            int[] passive = PassiveRecorder.stats();
+            if (passive[0] > 0) {
+                MirageLog.MIRAGE.debug("[MID] 被动捕获 " + passive[0] + " 个 mod（完整 "
+                        + (passive[0] - passive[1]) + "，不完整 " + passive[1] + "）");
+            }
 
             // DeferredRegister 闭环：所有 mod 声明完条目后统一 flush（仍在 unfreeze 窗口内）
             MirageLog.MIRAGE.info("flush " + pendingRegisters.size() + " 个 DeferredRegister ...");
@@ -223,6 +246,64 @@ public final class ModInitStage implements Stage {
                         + String.join("; ", failures));
             }
         });
+    }
+
+    /**
+     * MSR P2：把一个 mod 的被动捕获结果归档。
+     *
+     * <p>顺序是「收窗口 → 与磁盘旧录制合并 → diff → 写盘」：
+     * <ul>
+     *   <li>diff 的基线取 {@code peek}（不做 AG/fake 校对的原始条目），
+     *       否则 {@code lookup} 一校对失败就把基线丢了，二启 diff 形同虚设；</li>
+     *   <li>比较对象是**合并后**的结果而不是本次采集，否则"上次沙盒录到一批、这次被动录到另一批"
+     *       会被误报成大面积删除；</li>
+     *   <li>采集不完整（mod 有入口抛错）时 {@code storePassive} 拒绝入库 —— 与 P1
+     *       "半成品不入库"同规矩。</li>
+     * </ul>
+     *
+     * <p>任何失败只降级：被动捕获是优化项，不能反过来把 mod 初始化搞挂。
+     */
+    private static void archivePassive(MidCache cache, ModContainer mod) {
+        PassiveRecorder.Result r;
+        try {
+            r = PassiveRecorder.end();
+        } catch (Throwable t) {
+            MirageLog.MIRAGE.debug("[MID] 收被动捕获窗口失败（不影响启动）: " + mod.manifest.id, t);
+            return;
+        }
+        if (r == null) return;
+        if (cache == null || mod.detected == null) {
+            // 非 NeoForge mod 没有 MID 可写；窗口已经关掉，这里就不用再做别的
+            MirageLog.MIRAGE.debug("[MID] " + mod.manifest.id + " 无 MID 缓存目标，被动捕获仅用于本次诊断");
+            return;
+        }
+        try {
+            MidCache.Recorded cur = PassiveRecorder.toRecorded(r);
+            MidCache.Entry prevEntry = cache.peek(mod.jarFile);
+            MidCache.Recorded prev = (prevEntry != null) ? prevEntry.recorded : null;
+            MidCache.Recorded merged = MidCache.merge(prev, cur);
+
+            List<String> diffs = PassiveRecorder.diff(prev, merged);
+            if (diffs.isEmpty()) {
+                MirageLog.MIRAGE.debug("[MID] " + mod.manifest.id + " 与上次录制一致（"
+                        + merged.touched_apis.size() + " apis, "
+                        + merged.registered_events.size() + " events）");
+            } else {
+                MirageLog.MIRAGE.info("[MID] " + mod.manifest.id + " 录制有变化: "
+                        + String.join("; ", diffs));
+                PassiveRecorder.appendDiffReport(cache.root(), mod.manifest.id, diffs);
+            }
+
+            MidCache.Recorded stored = cache.storePassive(mod.jarFile, mod.detected, cur);
+            MirageLog.MIRAGE.debug("[MID] " + mod.manifest.id + " 被动捕获 source="
+                    + (stored.source == null ? "?" : stored.source)
+                    + " complete=" + stored.complete
+                    + " apis=" + (stored.touched_apis == null ? 0 : stored.touched_apis.size())
+                    + " events=" + (stored.registered_events == null ? 0 : stored.registered_events.size())
+                    + " dr=" + stored.deferred_register_count);
+        } catch (Throwable t) {
+            MirageLog.MIRAGE.warn("[MID] " + mod.manifest.id + " 被动捕获结果写缓存失败（不影响本次启动）", t);
+        }
     }
 
     /** 汇总行里的一项：{@code id(异常摘要)}，摘要走门面解包，避免出现裸 "null"。 */

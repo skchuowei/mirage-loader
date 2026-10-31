@@ -62,6 +62,9 @@ public class ModDiscoverer {
         }
 
         Map<String, ModContainer> byId = new HashMap<>();
+        // MSR P2 统计：本轮跑了几个 fake pass / 因何跳过（末尾一行汇总，见下）
+        int fakePasses = 0;
+        int skippedPasses = 0;
         try (var stream = Files.list(modsDir)) {
             var jars = stream.filter(p -> p.getFileName().toString().endsWith(".jar")).toList();
             MirageLog.LOADER.info("扫描 " + jars.size() + " 个 jar，目录: " + modsDir);
@@ -158,9 +161,6 @@ public class ModDiscoverer {
                     }
 
                     // ---- 4. neoforge.mods.toml（带 MID 缓存） ----
-                    boolean sandboxEnabled = !"off".equalsIgnoreCase(sandboxMode);
-                    boolean sandboxForce = "force".equalsIgnoreCase(sandboxMode);
-
                     NeoForgeModDetector.Detected neo = null;
                     MidCache.Entry cached = (cache != null)
                             ? cache.lookup(jar, null, forceRegen) : null;
@@ -175,12 +175,13 @@ public class ModDiscoverer {
                         neo = NeoForgeModDetector.detect(jf);
                     }
                     if (neo != null) {
-                        // 沙盒录制：缓存 miss 且开关允许（auto/force）时录；缓存命中但缺 recorded 时补录；
-                        // force 时无视缓存强制重录。off 时不录。
+                        // 沙盒录制（MSR P2 按需化）：判据集中在 RecordingPolicy ——
+                        // 版本区间完整的 mod 一律不跑 fake pass，touched 数据由 S6 的被动捕获补；
+                        // force 无条件录；缺区间的仍录（诊断价值）。理由逐条打 debug，便于核对。
                         MidCache.Recorded recorded = (cached != null) ? cached.recorded : null;
-                        boolean needRecord = sandboxEnabled
-                                && (recorded == null || sandboxForce);
-                        if (needRecord) {
+                        RecordingPolicy.Decision decision = RecordingPolicy.decide(sandboxMode, neo, recorded);
+                        if (decision.record()) {
+                            fakePasses++;
                             long t0 = System.currentTimeMillis();
                             recorded = io.mirage.loader.sandbox.SandboxRecorder.record(jar, neo);
                             if (recorded.failed) {
@@ -208,16 +209,18 @@ public class ModDiscoverer {
                                     MirageLog.LOADER.warn("MID 缓存写入失败（不影响本次启动，下次仍走现场识别）", e);
                                 }
                             }
-                        } else if (sandboxEnabled && recorded != null && verbose) {
-                            MirageLog.LOADER.debug("[Sandbox] 命中缓存: " + neo.id
-                                    + "（已录制，跳过沙盒）");
-                        } else if (cached == null && cache != null) {
-                            // 沙盒关闭：仍写 detected 缓存（保持旧行为，缓存元数据）
-                            try {
-                                cache.store(jar, neo, recorded);
-                                if (verbose) MirageLog.LOADER.debug("  · MID 缓存已写: " + neo.id);
-                            } catch (IOException e) {
-                                MirageLog.LOADER.warn("MID 缓存写入失败（不影响本次启动，下次仍走现场识别）", e);
+                        } else {
+                            skippedPasses++;
+                            MirageLog.LOADER.debug("[Sandbox] " + neo.id + " 跳过 fake pass："
+                                    + decision.why() + "（" + decision.reason() + "）");
+                            if (cached == null && cache != null) {
+                                // 没跑沙盒也要把识别结果存下来，否则下次启动还得重扫 class
+                                try {
+                                    cache.store(jar, neo, recorded);
+                                    if (verbose) MirageLog.LOADER.debug("  · MID 缓存已写: " + neo.id);
+                                } catch (IOException e) {
+                                    MirageLog.LOADER.warn("MID 缓存写入失败（不影响本次启动，下次仍走现场识别）", e);
+                                }
                             }
                         }
 
@@ -241,6 +244,8 @@ public class ModDiscoverer {
                         eps.put("server", List.of());
                         ModContainer c = new ModContainer(m, jar, eps);
                         c.fromNeoForge = true;
+                        // MSR P2：S6 被动捕获写缓存要用（MidCache.storePassive 需要 detected）
+                        c.detected = neo;
                         byId.put(neo.id, c);
                         result.add(c);
                         MirageLog.LOADER.debug("  + 发现 (neoforge) " + c
@@ -251,6 +256,12 @@ public class ModDiscoverer {
                     MirageLog.LOADER.debug("! " + jar.getFileName() + " 没有 mod 描述符，跳过");
                 }
             }
+        }
+        if (fakePasses > 0 || skippedPasses > 0) {
+            // 一行汇总：验收「首启零 fake pass」看的就是这里的 fakePasses 是否为 0，
+            // 以及日志里有没有 [Sandbox] 开始录制（那条在 SandboxRecorder 里）。
+            MirageLog.LOADER.debug("[Sandbox] fake pass: " + fakePasses + " 次 / 跳过 "
+                    + skippedPasses + " 个（理由见逐条 debug）");
         }
         return result;
     }

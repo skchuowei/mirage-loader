@@ -53,6 +53,14 @@ P0 = MSR-neo：进程内一次性 `SandboxClassLoader` + fake 表面 + 2 秒超�
 
 **验收标准**：带版本区间的 NeoForge mod 首启**零** fake pass 日志；缺区间的 mod 按需录制；二启产生 diff 报告；崩溃模拟（kill -9）后缓存无半成品。
 
+> **【实施记录·2026-10-31】** P2 已落地，计划书见 `2026-10-31_msr-p2.md`，验证脚本 `scripts/verify_msr_p2.ps1`（43 项断言 + 变异检验），实机冒烟待用户双击 bat。
+> 与原文的偏差（如实记）：
+> 1. **"首启零 fake pass"的判据**落在 `[Sandbox] 开始录制` 不出现 + 一行 debug 汇总 `fake pass: 0 次`；缺区间的 mod 仍会录，且**录了也补不出区间**（fake pass 只产生 touched 数据，版本信息全来自静态 toml 解析）——原文把"缺区间→跑 fake pass"写成触发条件，实际它在该场景只有诊断价值，不解决数据缺失。
+> 2. **被动捕获的覆盖面窄于沙盒**：挂点全在自有代码里，mod 直接调 MC 原版方法的调用看不到（要 P3 插桩）。因此合并策略是**取并集**而非覆盖，且文档不宣称两者等价。
+> 3. **版本伪装只解决"报什么版本"**，不新增"版本不匹配就拒绝加载"的判定；`FMLLoader` stub 只有 `versionInfo()`（其余方法缺失会以 `NoSuchMethodError` 暴露，不造假值）。
+> 4. **"崩溃模拟（kill -9）后缓存无半成品"**用 `.tmp` 残留 + `ATOMIC_MOVE` 实现并做了用例（只剩 `.tmp` 时 `lookup` 必须为 null），未真做 kill -9 进程实验——纯 JVM 用例已覆盖等价语义。
+> 5. 原文第 3 条"运行时按 MID 向 mod 报录制版本"中"录制版本"实际取的是 **toml 声明的区间端点**（MID 里那份字段本就抄自 toml），伪装算法见 `LoaderVersionMasquerade.pick`。
+
 ## P3 · 注入器深录（目标形态，AG/MDK 工具链）
 
 **目标**：行为级 MID 的批量生产工具，一次把整库 mod 录成注册/事件/配置级别的 MID（MID-B 数据来源）。

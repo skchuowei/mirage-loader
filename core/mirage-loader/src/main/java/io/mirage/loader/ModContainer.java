@@ -29,6 +29,22 @@ public class ModContainer {
      */
     public boolean fromNeoForge;
 
+    /**
+     * NeoForge 识别结果（id/version/mainClass/版本区间）。非 NeoForge 来源为 null。
+     * MSR P2：S6 的被动捕获要把录制结果写回 `.mid-cache`，而 {@link MidCache#storePassive}
+     * 需要这份元数据（缓存文件按 detected.id 定位、detected 本身也要保留）。
+     */
+    public NeoForgeModDetector.Detected detected;
+
+    /** 版本伪装用：该 mod 应看到的版本区间（NeoForge / MC），非 NeoForge mod 为 null。 */
+    public String neoForgeVersionRange() {
+        return detected != null ? detected.neoForgeVersionRange : null;
+    }
+
+    public String mcVersionRange() {
+        return detected != null ? detected.mcVersionRange : null;
+    }
+
     public ModContainer(ModManifest manifest, Path jarFile) {
         this(manifest, jarFile, null, null);
     }

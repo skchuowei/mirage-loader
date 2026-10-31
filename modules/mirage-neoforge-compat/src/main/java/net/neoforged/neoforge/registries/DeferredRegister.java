@@ -64,6 +64,10 @@ public class DeferredRegister<T> {
         this.registryKey = registryKey;
         this.modId = modId;
         this.fixedPath = fixedPath;
+        // MSR P2 被动捕获：NeoForge 风格 create/createBlocks/createItems 共同的收口点
+        // （窗口外 no-op；沙盒模式的同名 fake 类走 Sink，不经这里）
+        io.mirage.api.hook.PassiveHooks.api("net.neoforged.neoforge.registries.DeferredRegister.create");
+        io.mirage.api.hook.PassiveHooks.deferredRegister();
     }
 
     // ---------------------------------------------------------------
@@ -129,6 +133,7 @@ public class DeferredRegister<T> {
     // ---------------------------------------------------------------
 
     public <I extends T> DeferredHolder<I> register(String name, Supplier<I> supplier) {
+        io.mirage.api.hook.PassiveHooks.api("net.neoforged.neoforge.registries.DeferredRegister.register");
         // 兼容 mod 动态注册时序（如 ModBlocks.registerBlockItem 在 ModItems.ITEMS 已挂总线后
         // 再追加 BlockItem）：bridge 已存在时直接 forward，不抛异常。
         if (bridge != null) {

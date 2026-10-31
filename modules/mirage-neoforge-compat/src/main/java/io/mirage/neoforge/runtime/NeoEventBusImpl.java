@@ -1,5 +1,6 @@
 package io.mirage.neoforge.runtime;
 
+import io.mirage.api.hook.PassiveHooks;
 import io.mirage.api.log.MirageLog;
 
 import net.neoforged.bus.api.Event;
@@ -66,6 +67,8 @@ public final class NeoEventBusImpl implements IEventBus {
 
     @Override
     public void register(Object target) {
+        // MSR P2 被动捕获：NeoForge mod 的真实注册入口（窗口外 no-op）
+        PassiveHooks.api("net.neoforged.bus.api.IEventBus.register");
         int found = 0;
         for (Class<?> c = target.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
             for (Method m : c.getDeclaredMethods()) {
@@ -79,6 +82,7 @@ public final class NeoEventBusImpl implements IEventBus {
                     continue;
                 }
                 m.setAccessible(true);
+                PassiveHooks.event(eventType.getName());
                 add(new Listener(target, m, null, toPriority(ann.priority()), ann.receiveCancelled()), eventType);
                 found++;
             }
@@ -114,12 +118,16 @@ public final class NeoEventBusImpl implements IEventBus {
     @SuppressWarnings("unchecked")
     public <T extends Event> void addListener(EventPriority priority, boolean receiveCancelled, Consumer<T> consumer) {
         Class<?> eventType = resolveEventType(consumer);
+        PassiveHooks.api("net.neoforged.bus.api.IEventBus.addListener");
+        PassiveHooks.event(eventType.getName());
         add(new Listener(consumer, null, (Consumer<Object>) (Consumer<?>) consumer, priority, receiveCancelled), eventType);
     }
 
     @Override
     @SuppressWarnings("unchecked")
     public <T extends Event> void addListener(EventPriority priority, boolean receiveCancelled, Class<T> eventType, Consumer<T> consumer) {
+        PassiveHooks.api("net.neoforged.bus.api.IEventBus.addListener");
+        PassiveHooks.event(eventType.getName());
         add(new Listener(consumer, null, (Consumer<Object>) (Consumer<?>) consumer, priority, receiveCancelled), eventType);
     }
 
