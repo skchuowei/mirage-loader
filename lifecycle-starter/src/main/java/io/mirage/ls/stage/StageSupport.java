@@ -1,5 +1,7 @@
 package io.mirage.ls.stage;
 
+import io.mirage.api.log.MirageLog;
+
 import io.mirage.ls.LifecycleContext;
 import io.mirage.ls.StageOutcome;
 
@@ -20,9 +22,10 @@ public final class StageSupport {
             body.run();
             return StageOutcome.success();
         } catch (Throwable t) {
-            System.err.println("[Mirage] 启动 Minecraft 时发生致命错误:");
-            t.printStackTrace();
-            return StageOutcome.fatal(t.toString());
+            // 门面负责剥掉反射包装并展开 cause 链——原样式 "...: " + t 对
+            // InvocationTargetException 只能打出类名，等于没有原因
+            MirageLog.MIRAGE.error("启动 Minecraft 时发生致命错误", t);
+            return StageOutcome.fatal(MirageLog.summary(t));
         }
     }
 

@@ -1,5 +1,7 @@
 package io.mirage.ls.stage;
 
+import io.mirage.api.log.MirageLog;
+
 import io.mirage.api.event.ClientStartingEvent;
 import io.mirage.eventbus.EventBus;
 import io.mirage.loader.ModContainer;
@@ -54,22 +56,22 @@ public final class LoadedStage implements Stage {
             EventBus eventBus = StageSupport.get(ctx, "S2.eventBus");
             MirageClassLoader mcl = StageSupport.get(ctx, "S3.classLoader");
 
-            System.out.println("[Mirage] 通过 MirageClassLoader 加载 " + TARGET_MC_MAIN + " ...");
+            MirageLog.MIRAGE.info("通过 MirageClassLoader 加载 " + TARGET_MC_MAIN + " ...");
 
             // 调试：检查 classpath 能否找到 mod jar 的 assets
             try {
                 Enumeration<URL> assets = mcl.getResources("assets/");
-                System.out.println("[Mirage] getResources(\"assets/\"):");
+                MirageLog.MIRAGE.debug("getResources(\"assets/\"):");
                 while (assets.hasMoreElements()) {
-                    System.out.println("[Mirage]   -> " + assets.nextElement());
+                    MirageLog.MIRAGE.debug("  -> " + assets.nextElement());
                 }
                 // 检查具体贴图
                 URL tex = mcl.getResource("assets/testtab/textures/item/magic_dust.png");
-                System.out.println("[Mirage] testtab texture: " + tex);
+                MirageLog.MIRAGE.debug("testtab texture: " + tex);
                 URL lang = mcl.getResource("assets/testtab/lang/zh_cn.json");
-                System.out.println("[Mirage] testtab lang: " + lang);
+                MirageLog.MIRAGE.debug("testtab lang: " + lang);
             } catch (Exception e) {
-                System.err.println("[Mirage] getResources debug failed: " + e);
+                MirageLog.MIRAGE.debug("getResources 探测失败（仅影响调试输出）", e);
             }
             MirageDebug.setStage("启动 Minecraft 客户端");
             MirageDebug.setProgress(95);
@@ -81,11 +83,11 @@ public final class LoadedStage implements Stage {
 
             // 客户端启动事件：MC 构造器仍被阻塞在主窗口回调里，资源包/世界均未加载，
             // 此时可注册 Screen / HUD / 按键绑定。
-            System.out.println("[Mirage] 派发 ClientStartingEvent ...");
+            MirageLog.MIRAGE.info("派发 ClientStartingEvent ...");
             eventBus.post(new ClientStartingEvent());
             NeoLifecycle.postNeoLifecycle("net.neoforged.fml.event.lifecycle.FMLClientSetupEvent", mcl);
 
-            System.out.println("[Mirage] mod 初始化完成，启动 Minecraft 主类（交接早期窗口）...");
+            MirageLog.MIRAGE.info("mod 初始化完成，启动 Minecraft 主类（交接早期窗口）...");
             MirageDebug.setStage("启动 Minecraft");
             MirageDebug.setProgress(92);
 

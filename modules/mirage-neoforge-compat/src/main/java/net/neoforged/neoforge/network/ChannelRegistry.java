@@ -1,5 +1,7 @@
 package net.neoforged.neoforge.network;
 
+import io.mirage.api.log.MirageLog;
+
 import net.neoforged.neoforge.network.handling.IPayloadHandler;
 
 /**
@@ -46,7 +48,7 @@ public final class ChannelRegistry {
     public static void register(Object key, Direction direction, Object handler) {
         Entry prev = HANDLERS.putIfAbsent(key, new Entry(direction, handler));
         if (prev != null) {
-            System.out.println("[Mirage:NeoNet] 警告：payload " + key + " 已注册过 handler，忽略重复注册");
+            MirageLog.of("Mirage:NeoNet").warn("警告：payload " + key + " 已注册过 handler，忽略重复注册");
         }
     }
 
@@ -55,12 +57,12 @@ public final class ChannelRegistry {
     public static boolean dispatchServerbound(Object payload, Object key) {
         Entry e = key != null ? HANDLERS.get(key) : HANDLERS.get(payload.getClass());
         if (e == null) {
-            System.out.println("[Mirage:NeoNet] sendToServer：payload " + payload.getClass().getName()
+            MirageLog.of("Mirage:NeoNet").info("sendToServer：payload " + payload.getClass().getName()
                     + " 无已注册 handler（mod 未在 RegisterPayloadHandlersEvent / messageBuilder 中登记）");
             return false;
         }
         if (e.direction == Direction.CLIENTBOUND) {
-            System.out.println("[Mirage:NeoNet] 警告：payload " + payload.getClass().getName()
+            MirageLog.of("Mirage:NeoNet").warn("警告：payload " + payload.getClass().getName()
                     + " 只注册了客户端方向，sendToServer 不可达");
             return false;
         }
@@ -81,11 +83,11 @@ public final class ChannelRegistry {
     public static boolean dispatchClientbound(Object payload, Object key) {
         Entry e = key != null ? HANDLERS.get(key) : HANDLERS.get(payload.getClass());
         if (e == null) {
-            System.out.println("[Mirage:NeoNet] sendToClient：payload " + payload.getClass().getName() + " 无已注册 handler");
+            MirageLog.of("Mirage:NeoNet").info("sendToClient：payload " + payload.getClass().getName() + " 无已注册 handler");
             return false;
         }
         if (e.direction == Direction.SERVERBOUND) {
-            System.out.println("[Mirage:NeoNet] 警告：payload " + payload.getClass().getName()
+            MirageLog.of("Mirage:NeoNet").warn("警告：payload " + payload.getClass().getName()
                     + " 只注册了服务端方向，sendToPlayer 不可达");
             return false;
         }

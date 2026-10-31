@@ -1,5 +1,7 @@
 package io.mirage.ls;
 
+import io.mirage.api.log.MirageLog;
+
 /**
  * 解析失败策略（LS-Interfaces.md v0.2 §1 附属枚举；由 A1/MIS 冻结，禁止各模块自定义）。
  *
@@ -35,7 +37,7 @@ public enum ParseFailPolicy {
                 try {
                     return valueOf(v.toUpperCase(java.util.Locale.ROOT));
                 } catch (IllegalArgumentException e) {
-                    System.err.println("[LS] FATAL 非法 " + FLAG_PREFIX + "值: " + v
+                    MirageLog.LS.fatal("非法 " + FLAG_PREFIX + "值: " + v
                             + "（合法值: skip | crash | confirm）");
                     System.exit(1);
                 }

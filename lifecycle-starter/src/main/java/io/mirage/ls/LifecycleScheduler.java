@@ -1,5 +1,7 @@
 package io.mirage.ls;
 
+import io.mirage.api.log.MirageLog;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -31,29 +33,32 @@ public final class LifecycleScheduler {
     public synchronized void run(LifecycleContext ctx) {
         running = true;
         for (Stage stage : stages) {
-            System.out.println("[LS] stage " + stage.id() + " " + stage.name() + " start");
+            // 阶段骨架行保持原样（raw）：LS-Interfaces §5 冻结了 "[LS] stage <id> <name> start/done"
+            // 这一格式，历史日志与冒烟脚本按它做管道对比，加级别词会破坏可比性。
+            MirageLog.LS.raw("[LS] stage " + stage.id() + " " + stage.name() + " start");
             long start = System.currentTimeMillis();
             StageOutcome outcome;
             try {
                 outcome = stage.execute(ctx);
             } catch (Throwable t) {
-                System.err.println("[LS] FATAL " + stage.id() + ": " + t);
-                t.printStackTrace();
+                // 未预期异常：门面负责展开完整 cause 链（改造前 "+ t" 只有类名，
+                // 对 InvocationTargetException / ExceptionInInitializerError 等于没信息）
+                MirageLog.LS.fatal(stage.id() + " 阶段抛出未预期异常，启动中止", t);
                 System.exit(1);
                 return; // 不可达，exit 兜底
             }
             long ms = System.currentTimeMillis() - start;
             switch (outcome.result()) {
-                case SUCCESS -> System.out.println(
+                case SUCCESS -> MirageLog.LS.raw(
                         "[LS] stage " + stage.id() + " " + stage.name() + " done (" + ms + " ms)");
-                case SKIPPED -> System.out.println(
+                case SKIPPED -> MirageLog.LS.raw(
                         "[LS] stage " + stage.id() + " " + stage.name() + " skipped: " + outcome.detail());
                 case FATAL -> {
-                    System.err.println("[LS] FATAL " + stage.id() + ": " + outcome.detail());
+                    MirageLog.LS.fatal(stage.id() + ": " + outcome.detail());
                     System.exit(1);
                 }
             }
         }
-        System.out.println("[LS] pipeline finished");
+        MirageLog.LS.raw("[LS] pipeline finished");
     }
 }

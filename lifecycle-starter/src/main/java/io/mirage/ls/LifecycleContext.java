@@ -1,5 +1,7 @@
 package io.mirage.ls;
 
+import io.mirage.api.log.MirageLog;
+
 import io.mirage.api.env.Dist;
 
 import java.nio.file.Path;
@@ -122,7 +124,7 @@ public final class LifecycleContext {
         if (v != null && !v.isEmpty()) {
             if (v.equalsIgnoreCase("server") || v.equalsIgnoreCase("dedicated")) return Dist.DEDICATED_SERVER;
             if (v.equalsIgnoreCase("client")) return Dist.CLIENT;
-            System.err.println("[Mirage] 无法识别的 mirage.dist=\"" + v + "\"，按 CLIENT 处理");
+            MirageLog.MIRAGE.warn("无法识别的 mirage.dist=\"" + v + "\"（合法值 client/server），按 CLIENT 处理");
         }
         return Dist.CLIENT;
     }
@@ -155,7 +157,7 @@ public final class LifecycleContext {
         if (policy == null && config != null) policy = config.failPolicy();
         if (policy == null) policy = mode.defaultFailPolicy();
         if (policy == ParseFailPolicy.CONFIRM && System.console() == null) {
-            System.out.println("[LS] WARN 无人值守环境（无控制台），ParseFailPolicy=confirm 自动降级为 crash");
+            MirageLog.LS.warn("无人值守环境（无控制台），ParseFailPolicy=confirm 自动降级为 crash");
             policy = ParseFailPolicy.CRASH;
         }
         return policy;

@@ -1,5 +1,7 @@
 package io.mirage.ls;
 
+import io.mirage.api.log.MirageLog;
+
 /**
  * LS 启动周期（LS-Interfaces.md v0.2 §1，2026-10-25 由用户拍板定四条，取代 v0.1 的
  * NATIVE/TRANSPILE/RECORD 三模式）。
@@ -36,7 +38,7 @@ public enum LifecycleMode {
                 String v = a.substring(FLAG_PREFIX.length()).trim().toLowerCase(java.util.Locale.ROOT);
                 LifecycleMode m = alias(v);
                 if (m == null) {
-                    System.err.println("[LS] FATAL 非法 --lifecycle-mode 值: " + v
+                    MirageLog.LS.fatal("非法 --lifecycle-mode 值: " + v
                             + "（合法值: C1 | C2 | C3 | custom；兼容别名: native | transpile | record）");
                     System.exit(1);
                 }

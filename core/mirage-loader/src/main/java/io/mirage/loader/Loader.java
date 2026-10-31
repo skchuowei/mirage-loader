@@ -1,5 +1,7 @@
 package io.mirage.loader;
 
+import io.mirage.api.log.MirageLog;
+
 import java.nio.file.Path;
 import java.util.List;
 
@@ -30,20 +32,21 @@ public class Loader {
                                           boolean forceRegen, boolean verbose,
                                           String sandboxMode) {
         Path modsDir = gameDir.resolve("mods");
-        System.out.println("[Mirage] ---- 开始扫描 mod ----");
+        MirageLog.LOADER.info("---- 开始扫描 mod ----");
         try {
             List<ModContainer> raw = new ModDiscoverer().discover(modsDir, cache, forceRegen, verbose, sandboxMode);
             List<ModContainer> sorted = new DependencySorter().sort(raw);
-            System.out.println("[Mirage] ---- 加载顺序（" + sorted.size() + " 个 mod）----");
+            MirageLog.LOADER.info("---- 加载顺序（" + sorted.size() + " 个 mod）----");
             int i = 1;
             for (ModContainer c : sorted) {
-                System.out.println("[Mirage]   " + (i++) + ". " + c.manifest.id + " v" + c.manifest.version);
+                // 逐条清单只在排查加载顺序问题时有用，属诊断输出
+                MirageLog.LOADER.debug("  " + (i++) + ". " + c.manifest.id + " v" + c.manifest.version);
             }
-            System.out.println("[Mirage] ---- mod 扫描完成 ----");
+            MirageLog.LOADER.info("---- mod 扫描完成 ----");
             return sorted;
         } catch (Exception e) {
-            System.err.println("[Mirage] mod 扫描失败: " + e.getMessage());
-            e.printStackTrace();
+            // 扫描失败会让「一个 mod 都没有」，必须带全堆栈——否则只能看到 "null"
+            MirageLog.LOADER.error("mod 扫描失败（本次按 0 个 mod 继续启动）", e);
             return List.of();
         }
     }

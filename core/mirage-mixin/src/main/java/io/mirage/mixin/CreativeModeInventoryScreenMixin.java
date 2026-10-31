@@ -1,5 +1,7 @@
 package io.mirage.mixin;
 
+import io.mirage.api.log.MirageLog;
+
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
@@ -110,11 +112,11 @@ public abstract class CreativeModeInventoryScreenMixin extends AbstractContainer
                         .bounds(this.leftPos + this.imageWidth + 2, btnY, 18, 12).build());
             }
 
-            System.out.println("[Mirage-Mixin] 创造标签分页已生效 pageCount=" + mirage$pageCount
+            MirageLog.MIXIN.info("创造标签分页已生效 pageCount=" + mirage$pageCount
                     + " pagedTabs=" + paged.size() + " allTabs=" + all.size()
                     + " currentPage=" + mirage$currentPage);
         } catch (Throwable t) {
-            System.err.println("[Mirage-Mixin] 创造标签分页初始化失败: " + t);
+            MirageLog.MIXIN.warn("创造标签分页初始化失败", t);
             t.printStackTrace();
         }
     }

@@ -1,5 +1,7 @@
 package io.mirage.ls.stage;
 
+import io.mirage.api.log.MirageLog;
+
 import java.lang.reflect.Method;
 
 /**
@@ -23,7 +25,7 @@ public final class NeoLifecycle {
             Object event = Class.forName(eventClassName, true, cl).getDeclaredConstructor().newInstance();
             bus.getClass().getMethod("post", Object.class).invoke(bus, event);
         } catch (Throwable t) {
-            System.err.println("[Mirage] post NeoForge 生命周期事件 " + eventClassName + " 失败: " + t);
+            MirageLog.MIRAGE.warn("post NeoForge 生命周期事件 " + eventClassName + " 失败（该事件的监听器不会触发）", t);
         }
     }
 
@@ -42,7 +44,7 @@ public final class NeoLifecycle {
             Object ctx = Class.forName("net.neoforged.fml.javafmlmod.FMLJavaModLoadingContext", true, cl)
                     .getMethod("get").invoke(null);
             Object modBus = busCls.cast(ctx.getClass().getMethod("getModEventBus").invoke(ctx));
-            System.out.println("[Mirage] " + cls.getName() + " 使用 IEventBus 注入式构造");
+            MirageLog.MIRAGE.debug(cls.getName() + " 使用 IEventBus 注入式构造");
             return cls.getConstructor(busCls).newInstance(modBus);
         }
     }
@@ -61,7 +63,7 @@ public final class NeoLifecycle {
         if (m != null) {
             m.invoke(instance);
         } else {
-            System.out.println("[Mirage]   ! " + instance.getClass().getName()
+            MirageLog.MIRAGE.warn("! " + instance.getClass().getName()
                     + " 没有实现 ModInitializer，也没有 onInitialize()，跳过");
         }
     }

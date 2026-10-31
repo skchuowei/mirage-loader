@@ -1,5 +1,7 @@
 package io.mirage.ls.stage;
 
+import io.mirage.api.log.MirageLog;
+
 import io.mirage.loader.Loader;
 import io.mirage.loader.MidCache;
 import io.mirage.loader.ModContainer;
@@ -44,7 +46,7 @@ public final class DiscoveryStage implements Stage {
             io.mirage.loader.MirageDebug.setStage("扫描 mods 目录");
             io.mirage.loader.MirageDebug.setProgress(3);
             Path gameDir = ctx.gameDir();
-            System.out.println("[Mirage] 游戏目录 = " + gameDir);
+            MirageLog.MIRAGE.info("游戏目录 = " + gameDir);
 
             io.mirage.loader.MirageDebug.setStage("解析 mod 清单");
             io.mirage.loader.MirageDebug.setProgress(8);
@@ -58,7 +60,7 @@ public final class DiscoveryStage implements Stage {
             }
 
             io.mirage.loader.MirageDebug.setModTotal(mods.size());
-            System.out.println("[Mirage] 发现 " + mods.size() + " 个 mod");
+            MirageLog.MIRAGE.info("发现 " + mods.size() + " 个 mod");
             for (ModContainer m : mods) {
                 io.mirage.loader.MirageDebug.modNamespaces.add(m.manifest.id);
             }
@@ -73,7 +75,7 @@ public final class DiscoveryStage implements Stage {
             if (m.ir != null || (m.fabricEntrypoints == null && !m.fromNeoForge)) {
                 nativeOnly.add(m);
             } else {
-                System.out.println("[Mirage] WARN C1 直启模式跳过非 mirage 原生 mod: "
+                MirageLog.MIRAGE.warn("C1 直启模式跳过非 mirage 原生 mod: "
                         + m.manifest.id + " v" + m.manifest.version
                         + "（需要 AG 转译，请用 C2/C3 周期）");
             }

@@ -1,5 +1,7 @@
 package io.mirage.mixin;
 
+import io.mirage.api.log.MirageLog;
+
 import org.objectweb.asm.tree.ClassNode;
 import org.spongepowered.asm.launch.platform.container.IContainerHandle;
 import org.spongepowered.asm.service.IClassBytecodeProvider;
@@ -132,10 +134,10 @@ public class MirageMixinService extends MixinServiceAbstract
                 json = json.replaceAll("\"compatibilityLevel\"\\s*:\\s*\"[^\"]*\"\\s*,?", "");
                 // 删除 mixinextras（Sponge Mixin 0.8.7 不支持 MixinExtras），连同前面的逗号
                 json = json.replaceAll(",?\\s*\"mixinextras\"\\s*:\\s*\\{[^}]*\\}", "");
-                System.out.println("[Mirage-Mixin] 后处理 mixin config: " + name);
+                MirageLog.MIXIN.info("后处理 mixin config: " + name);
                 return new java.io.ByteArrayInputStream(json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             } catch (Exception e) {
-                System.err.println("[Mirage-Mixin] 后处理 " + name + " 失败: " + e);
+                MirageLog.MIXIN.warn("后处理 " + name + " 失败", e);
             }
         }
         return raw;

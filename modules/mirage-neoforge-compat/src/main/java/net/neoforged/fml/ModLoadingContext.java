@@ -1,5 +1,7 @@
 package net.neoforged.fml;
 
+import io.mirage.api.log.MirageLog;
+
 import net.neoforged.fml.config.ConfigData;
 import net.neoforged.fml.config.IConfigSpec;
 import net.neoforged.fml.config.ModConfig;
@@ -60,12 +62,12 @@ public final class ModLoadingContext {
         try {
             parsed = TomlConfigIO.readFile(fullPath);
         } catch (Exception e) {
-            System.err.println("[Mirage][Config] 读取 " + fullPath + " 失败: " + e + "，使用空配置");
+            MirageLog.MIRAGE.warn("[Config] 读取 " + fullPath + " 失败: " + e + "，使用空配置");
             parsed = new LinkedHashMap<>();
         }
         ModConfig mc = new ModConfig(type, id, fileName, fullPath, new TomlConfigData(parsed));
         byKey.put(key(id, type), mc);
-        System.out.println("[Mirage][Config] 注册 mod=" + id + " type=" + type + " file=" + fullPath);
+        MirageLog.MIRAGE.info("[Config] 注册 mod=" + id + " type=" + type + " file=" + fullPath);
         return mc;
     }
 

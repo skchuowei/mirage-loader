@@ -1,6 +1,7 @@
 package io.mirage.eventbus;
 
 import io.mirage.api.SubscribeEvent;
+import io.mirage.api.log.MirageLog;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -39,7 +40,12 @@ public class EventBus {
                     }
                 }
             } catch (Exception e) {
-                System.err.println("[Mirage] 事件处理错误: " + e.getMessage());
+                // 改造前是 ": " + e.getMessage()——对 NPE / InvocationTargetException
+                // 只会打印出 "null"，既不知道是哪个监听器炸的，也不知道真实 cause。
+                // 这里补上「监听器方法 + 事件类型」，并把异常交给门面展开完整链路。
+                MirageLog.MIRAGE.error("事件处理错误: "
+                        + m.getDeclaringClass().getName() + "#" + m.getName()
+                        + " 处理 " + event.getClass().getSimpleName() + " 时抛出", e);
             }
         }
     }

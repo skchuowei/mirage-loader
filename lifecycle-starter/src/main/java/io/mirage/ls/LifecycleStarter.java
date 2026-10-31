@@ -1,5 +1,7 @@
 package io.mirage.ls;
 
+import io.mirage.api.log.MirageLog;
+
 import io.mirage.ls.stage.DiscoveryStage;
 import io.mirage.ls.stage.EventBusStage;
 import io.mirage.ls.stage.LoadedStage;
@@ -36,29 +38,29 @@ public final class LifecycleStarter {
     public static void main(String[] args) {
         // [LS] mode= 是计划文档冻结的冒烟关键字，格式不得变
         LifecycleMode mode = LifecycleMode.parse(args);
-        System.out.println("[LS] mode=" + mode.logName());
+        MirageLog.LS.raw("[LS] mode=" + mode.logName());
 
         // C4 自定义周期：加载 mirage.ls.json（--lifecycle-config=<file> 可覆盖路径）
         LsConfig config = null;
         if (mode == LifecycleMode.CUSTOM) {
             Path configPath = resolveConfigPath(args);
             if (!Files.isRegularFile(configPath)) {
-                System.err.println("[LS] FATAL C4 自定义周期需要配置文件: " + configPath
+                MirageLog.LS.fatal("C4 自定义周期需要配置文件: " + configPath
                         + "（可用 --lifecycle-config=<file> 显式指定）");
                 System.exit(1);
                 return;
             }
             config = LsConfig.load(configPath); // 内部校验失败即 FATAL
-            System.out.println("[LS] config=" + configPath.toAbsolutePath());
+            MirageLog.LS.raw("[LS] config=" + configPath.toAbsolutePath());
             if (!config.agModules().isEmpty()) {
-                System.out.println("[LS] AG 启用集 = " + config.agModules()
+                MirageLog.LS.raw("[LS] AG 启用集 = " + config.agModules()
                         + "（ModuleHandle 接入为 phase 3，本期仅登记）");
             }
         }
 
         LifecycleContext ctx = new LifecycleContext(args, mode, config);
-        System.out.println("[LS] cycle=" + mode.describe());
-        System.out.println("[LS] sandbox-record=" + ctx.sandboxMode()
+        MirageLog.LS.raw("[LS] cycle=" + mode.describe());
+        MirageLog.LS.raw("[LS] sandbox-record=" + ctx.sandboxMode()
                 + " parseFailPolicy=" + ctx.failPolicy().logName()
                 + (config != null && config.minCoverage() >= 0
                         ? " minCoverage=" + config.minCoverage() : ""));
@@ -86,7 +88,7 @@ public final class LifecycleStarter {
     private static void add(LifecycleScheduler scheduler, Stage stage, String stageId, LsConfig config) {
         Boolean enabled = config == null ? null : config.stageEnabled(stageId);
         if (enabled != null && !enabled) {
-            System.out.println("[LS] stage " + stageId + " " + stage.name()
+            MirageLog.LS.raw("[LS] stage " + stageId + " " + stage.name()
                     + " 按 mirage.ls.json 配置禁用（enabled=false）");
             return;
         }

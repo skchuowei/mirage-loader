@@ -1,5 +1,7 @@
 package net.neoforged.neoforge.registries;
 
+import io.mirage.api.log.MirageLog;
+
 // 注意：不能 import io.mirage.api.registry.DeferredRegister——本类与之同名，
 // 同一编译单元简单名冲突。下面一律用全限定名引用 MG 侧 DeferredRegister。
 import net.minecraft.core.Registry;
@@ -152,7 +154,7 @@ public class DeferredRegister<T> {
         String path = resolveRegistryPath();
         Class<T> elementType = mapElementType(path);
         if (elementType == null) {
-            System.out.println("[Mirage:NeoDR] " + modId + " 跳过未知注册表 " + path
+            MirageLog.of("Mirage:NeoDR").info("" + modId + " 跳过未知注册表 " + path
                     + "（" + entries.size() + " 个条目未桥接）");
             return;
         }
@@ -166,7 +168,7 @@ public class DeferredRegister<T> {
             e.forwardTo(bridge);
         }
         bridge.register();
-        System.out.println("[Mirage:NeoDR] " + modId + ":" + path
+        MirageLog.of("Mirage:NeoDR").info("" + modId + ":" + path
                 + " 桥接 " + entries.size() + " 个条目到 MG DeferredRegister");
     }
 
@@ -190,7 +192,7 @@ public class DeferredRegister<T> {
             if (close > 0) after = after.substring(0, close).trim();
             int colon = after.indexOf(':');
             if (colon >= 0) after = after.substring(colon + 1);
-            System.out.println("[Mirage:NeoDBG] modId=" + modId + " parsed registry path=" + after + " from " + s);
+            MirageLog.of("Mirage:NeoDBG").debug("modId=" + modId + " parsed registry path=" + after + " from " + s);
             return after;
         }
         return "";
@@ -277,7 +279,7 @@ public class DeferredRegister<T> {
             // 当前类由 mcl 加载，Class.forName 不带 loader 即用 mcl，能找到 MC 真类
             return (Class<T>) Class.forName(cn);
         } catch (ClassNotFoundException e) {
-            System.err.println("[Mirage:NeoDR] 找不到 MC 元素类型 " + cn + ": " + e);
+            MirageLog.of("Mirage:NeoDR").warn("找不到 MC 元素类型 " + cn + "", e);
             return null;
         }
     }

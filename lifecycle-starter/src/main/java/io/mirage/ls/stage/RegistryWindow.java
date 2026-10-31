@@ -1,5 +1,6 @@
 package io.mirage.ls.stage;
 
+import io.mirage.api.log.MirageLog;
 import io.mirage.api.registry.DeferredRegister;
 import io.mirage.loader.MirageDebug;
 import io.mirage.ls.LifecycleContext;
@@ -70,14 +71,14 @@ public final class RegistryWindow {
         // ---- 保序：拆分前 Launcher 在 Bootstrap 前先运行 SharedConstants.tryDetectVersion() ----
         // DataFixers.<clinit> 经 SharedConstants.getCurrentVersion() 读游戏版本，
         // 缺此步 ISE("Game version not set")（2026-10-25 崩溃回归：LS 迁移漏迁此调用）。
-        System.out.println("[Mirage] 运行 SharedConstants.tryDetectVersion() ...");
+        MirageLog.MIRAGE.info("运行 SharedConstants.tryDetectVersion() ...");
         io.mirage.loader.MirageDebug.setStage("检测 MC 版本");
         io.mirage.loader.MirageDebug.setProgress(22);
         Class<?> sc = Class.forName("net.minecraft.SharedConstants", true, mcl);
         sc.getMethod("tryDetectVersion").invoke(null);
 
         // ---- 单线程：mod 全部初始化完成后再启动 Minecraft 主类 ----
-        System.out.println("[Mirage] 运行 Bootstrap.bootStrap() ...");
+        MirageLog.MIRAGE.info("运行 Bootstrap.bootStrap() ...");
         io.mirage.loader.MirageDebug.setStage("初始化注册表");
         io.mirage.loader.MirageDebug.setProgress(32);
         Class<?> bootstrap = Class.forName("net.minecraft.server.Bootstrap", true, mcl);
@@ -86,7 +87,7 @@ public final class RegistryWindow {
         // M5：Bootstrap 后 registry 已 freeze，反射解冻所有 MappedRegistry，注册 Mod 内容，再冻结。
         // 之前只解冻 BLOCK/ITEM/CREATIVE_MODE_TAB，导致 entity_type/enchantment/biome 等
         // DeferredRegister 无法注册（Registry is frozen / 跳过未知注册表类型）。
-        System.out.println("[Mirage] 解冻注册表以注册 mod 内容 ...");
+        MirageLog.MIRAGE.info("解冻注册表以注册 mod 内容 ...");
         io.mirage.loader.MirageDebug.setStage("解冻注册表");
         io.mirage.loader.MirageDebug.setProgress(42);
         Class<?> builtInReg = Class.forName("net.minecraft.core.registries.BuiltInRegistries", true, mcl);
@@ -123,7 +124,7 @@ public final class RegistryWindow {
                 unfreeze.accept(r);
             }
         }
-        System.out.println("[Mirage] 已解冻 " + allMappedRegistries.size() + " 个 MappedRegistry");
+        MirageLog.MIRAGE.info("已解冻 " + allMappedRegistries.size() + " 个 MappedRegistry");
 
         // 取常用的三个，给下面 special-case 用（语义不变）
         Object blockReg = builtInReg.getField("BLOCK").get(null);
@@ -161,9 +162,9 @@ public final class RegistryWindow {
         Object reg = lookupRegistry(path);
         if (reg == null) {
             // 路径确实不存在 / 本加载器未支持（如纯 codec 注册表）→ 告警跳过，不静默错注册。
-            System.out.println("[Mirage] DeferredRegister: 跳过未知注册表类型 "
+            MirageLog.MIRAGE.warn("DeferredRegister 跳过未知注册表类型 "
                     + path + " (mod=" + dr.modId()
-                    + ", entries=" + pending.size() + ")");
+                    + ", entries=" + pending.size() + ")——这些条目不会注册");
             return;
         }
         for (Map.Entry<String, Supplier<?>> e : pending.entrySet()) {
@@ -180,7 +181,7 @@ public final class RegistryWindow {
                         Object ref = createIntrusive.invoke(null, reg, value);
                         ((Map<Object, Object>) unregField.get(reg)).put(value, ref);
                     } catch (Exception ihEx) {
-                        System.err.println("[Mirage] createIntrusive 失败 " + ihEx);
+                        MirageLog.MIRAGE.warn("createIntrusive 失败（创造模式标签页可能因缺 intrusive holder 而注册失败）", ihEx);
                     }
                 }
                 regRegisterMethod.invoke(null, reg, id, value);
@@ -200,7 +201,7 @@ public final class RegistryWindow {
                         }
                     }
                 } catch (Exception bindEx) {
-                    System.err.println("[Mirage] 绑定 block.item 失败: " + bindEx);
+                    MirageLog.MIRAGE.warn("绑定 block.item 失败: " + value, bindEx);
                 }
                 // bug #1 真修复：Properties.setId() 在 Block/Item 构造时创建 intrusive
                 // Holder.Reference 塞进 unregisteredIntrusiveHolders。Registry.register
@@ -209,12 +210,14 @@ public final class RegistryWindow {
                 try {
                     ((Map<?, ?>) unregField.get(reg)).remove(value);
                 } catch (Exception ignore) {}
-                System.out.println("[Mirage] DeferredRegister: 注册 " + path
-                        + " " + dr.modId() + ":" + e.getKey());
+                MirageLog.MIRAGE.debug("DeferredRegister: 注册 "
+                        + path + " " + dr.modId() + ":" + e.getKey());
             } catch (Exception ex) {
-                System.err.println("[Mirage] DeferredRegister 注册失败 "
-                        + dr.modId() + ":" + e.getKey() + " -> " + ex);
-                ex.printStackTrace();
+                // ex 通常是 InvocationTargetException（反射调 register），它的 message 为 null，
+                // 改造前打印出来只有类名 = 「注册失败了但不知道为何」。门面会剥掉包装层，
+                // 把 mod 侧真正抛出的 cause（重复注册 / 注册表冻结 / 非法 id）完整打出来。
+                MirageLog.MIRAGE.error("DeferredRegister 注册失败 "
+                        + dr.modId() + ":" + e.getKey() + " @ " + path, ex);
             }
         }
     }
@@ -230,7 +233,7 @@ public final class RegistryWindow {
             // 路径确实不存在（mod 拼错 / 该注册表本加载器不支持）→ 返回 null，调用方告警
             return null;
         } catch (Exception e) {
-            System.err.println("[Mirage] 查找注册表 " + path + " 失败: " + e);
+            MirageLog.MIRAGE.warn("查找注册表 " + path + " 失败（该注册表不可用，相关条目将跳过）", e);
             return null;
         }
     }
@@ -245,7 +248,7 @@ public final class RegistryWindow {
      * 保序迁移自拆分前 Launcher，在 S6 mod 全部初始化完成后执行。
      */
     public void patchBlockStates() throws Exception {
-        System.out.println("[Mirage] 修补 mod 方块的 BlockState 注册表 ...");
+        MirageLog.MIRAGE.info("修补 mod 方块的 BlockState 注册表 ...");
         io.mirage.loader.MirageDebug.setStage("修补 BlockState 注册表");
         io.mirage.loader.MirageDebug.setProgress(72);
         Class<?> blockCls = Class.forName("net.minecraft.world.level.block.Block", true, mcl);
@@ -276,7 +279,7 @@ public final class RegistryWindow {
                     int newId = idToT.size();
                     addMappingMethod.invoke(bsr, state, newId);
                     patched++;
-                    System.out.println("[Mirage]   + 修补 BlockState id=" + newId + " -> " + state);
+                    MirageLog.MIRAGE.debug("  + 修补 BlockState id=" + newId + " -> " + state);
                 }
                 // 触发 BlockState cache 初始化（occlusionShapesByFace 等）
                 try {
@@ -287,7 +290,7 @@ public final class RegistryWindow {
                 // 跳过不能访问的
             }
         }
-        System.out.println("[Mirage] 已修补 " + patched + " 个 BlockState");
+        MirageLog.MIRAGE.info("已修补 " + patched + " 个 BlockState");
     }
 
     /**
@@ -295,7 +298,7 @@ public final class RegistryWindow {
      * 保序迁移自拆分前 Launcher（S6 mod 初始化 + flush 之后）。
      */
     public void refreeze() throws Exception {
-        System.out.println("[Mirage] 重新冻结注册表 ...");
+        MirageLog.MIRAGE.info("重新冻结注册表 ...");
         io.mirage.loader.MirageDebug.setStage("冻结注册表");
         io.mirage.loader.MirageDebug.setProgress(85);
         // bug #1 兜底：native backend 已在注册时精准 remove(value)，正常情况下这里应为空。
@@ -305,14 +308,14 @@ public final class RegistryWindow {
             for (Object regObj : new Object[]{blockReg, itemReg, tabReg}) {
                 Map<Object, Object> unreg = unregisteredHolders(regObj);
                 if (unreg != null && !unreg.isEmpty()) {
-                    System.out.println("[Mirage] bug#1 兜底: " + unreg.size()
+                    MirageLog.MIRAGE.debug("bug#1 兜底: " + unreg.size()
                             + " 个未注册 intrusive holder 残留，将 clear: "
                             + unreg.keySet().stream().map(k -> k.getClass().getSimpleName()).toList());
                     unreg.clear();
                 }
             }
         } catch (Exception e) {
-            System.err.println("[Mirage] unregisteredIntrusiveHolders 兜底检查失败: " + e);
+            MirageLog.MIRAGE.warn("unregisteredIntrusiveHolders 兜底检查失败（注册表 freeze 可能报残留告警）", e);
         }
         blockReg.getClass().getMethod("freeze").invoke(blockReg);
         itemReg.getClass().getMethod("freeze").invoke(itemReg);

@@ -1,5 +1,7 @@
 package io.mirage.loader;
 
+import io.mirage.api.log.MirageLog;
+
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 
@@ -54,14 +56,15 @@ public class ModDiscoverer {
                                       String sandboxMode) throws IOException {
         List<ModContainer> result = new ArrayList<>();
         if (!Files.isDirectory(modsDir)) {
-            System.out.println("[Mirage] mod 目录不存在: " + modsDir + "（跳过）");
+            MirageLog.LOADER.warn("mod 目录不存在: " + modsDir
+                    + "（本次不加载任何 mod，请确认 --gameDir 与 mods/ 目录）");
             return result;
         }
 
         Map<String, ModContainer> byId = new HashMap<>();
         try (var stream = Files.list(modsDir)) {
             var jars = stream.filter(p -> p.getFileName().toString().endsWith(".jar")).toList();
-            System.out.println("[Mirage] 扫描 " + jars.size() + " 个 jar，目录: " + modsDir);
+            MirageLog.LOADER.info("扫描 " + jars.size() + " 个 jar，目录: " + modsDir);
 
             for (Path jar : jars) {
                 try (JarFile jf = new JarFile(jar.toFile())) {
@@ -73,7 +76,7 @@ public class ModDiscoverer {
                             IrDescriptorParser.IrResult ir = IrDescriptorParser.parse(in);
                             if (ir == null || ir.id == null || ir.id.isEmpty()
                                     || ir.version == null || ir.version.isEmpty()) {
-                                System.out.println("[Mirage]   ! " + jar.getFileName()
+                                MirageLog.LOADER.debug("! " + jar.getFileName()
                                         + " IR 描述符无效，回退 legacy 检查");
                             } else {
                                 if (byId.containsKey(ir.id)) {
@@ -88,7 +91,7 @@ public class ModDiscoverer {
                                 ModContainer c = new ModContainer(m, jar, ir.entrypoints, ir);
                                 byId.put(ir.id, c);
                                 result.add(c);
-                                System.out.println("[Mirage]   + 发现 (IR " + ir.specVersion + ") " + c
+                                MirageLog.LOADER.debug("  + 发现 (IR " + ir.specVersion + ") " + c
                                         + " [main=" + ir.entrypoints.get("main").size()
                                         + ", client=" + ir.entrypoints.get("client").size()
                                         + ", server=" + ir.entrypoints.get("server").size() + "]");
@@ -106,7 +109,7 @@ public class ModDiscoverer {
                             JsonObject json = GSON.fromJson(reader, JsonObject.class);
                             ModManifest m = GSON.fromJson(json, ModManifest.class);
                             if (m == null || !m.isValid()) {
-                                System.out.println("[Mirage]   ! " + jar.getFileName() + " manifest 无效，跳过");
+                                MirageLog.LOADER.warn("! " + jar.getFileName() + " 的 mirage.mod.json 无效（缺 id/version），该 mod 被跳过");
                                 continue;
                             }
                             // MDK 模板里写的是 "entrypoint"，POJO 字段是 mainClass，这里补上别名映射
@@ -119,7 +122,7 @@ public class ModDiscoverer {
                             ModContainer c = new ModContainer(m, jar);
                             byId.put(m.id, c);
                             result.add(c);
-                            System.out.println("[Mirage]   + 发现 (mirage) " + c);
+                            MirageLog.LOADER.debug("  + 发现 (mirage) " + c);
                         }
                         continue;
                     }
@@ -131,7 +134,7 @@ public class ModDiscoverer {
                              InputStreamReader reader = new InputStreamReader(in, StandardCharsets.UTF_8)) {
                             FabricModManifest fm = GSON.fromJson(reader, FabricModManifest.class);
                             if (fm == null || !fm.isValid()) {
-                                System.out.println("[Mirage]   ! " + jar.getFileName() + " fabric.mod.json 无效，跳过");
+                                MirageLog.LOADER.warn("! " + jar.getFileName() + " 的 fabric.mod.json 无效，该 mod 被跳过");
                                 continue;
                             }
                             ModManifest m = fm.toMirageManifest();
@@ -147,7 +150,7 @@ public class ModDiscoverer {
                             ModContainer c = new ModContainer(m, jar, eps);
                             byId.put(m.id, c);
                             result.add(c);
-                            System.out.println("[Mirage]   + 发现 (fabric) " + c
+                            MirageLog.LOADER.debug("  + 发现 (fabric) " + c
                                     + " [main=" + eps.get("main").size()
                                     + ", client=" + eps.get("client").size() + "]");
                         }
@@ -164,7 +167,7 @@ public class ModDiscoverer {
                     if (cached != null) {
                         neo = cached.detected;
                         if (verbose) {
-                            System.out.println("[Mirage]   · MID 缓存命中: " + neo.id
+                            MirageLog.LOADER.debug("  · MID 缓存命中: " + neo.id
                                     + " v" + neo.version + "（跳过 ASM 扫 class）");
                         }
                     }
@@ -181,10 +184,10 @@ public class ModDiscoverer {
                             long t0 = System.currentTimeMillis();
                             recorded = io.mirage.loader.sandbox.SandboxRecorder.record(jar, neo);
                             if (recorded.failed) {
-                                System.err.println("[Mirage][Sandbox] WARN mod=" + neo.id
+                                MirageLog.LOADER.warn("[Sandbox] mod=" + neo.id
                                         + " 录制失败: " + recorded.error + "，降级为只存元数据");
                             } else {
-                                System.out.println("[Mirage][Sandbox] 录制 " + neo.id
+                                MirageLog.LOADER.debug("[Sandbox] 录制 " + neo.id
                                         + " 完成 (" + recorded.record_duration_ms + " ms, "
                                         + recorded.touched_apis.size() + " apis, "
                                         + recorded.registered_events.size() + " events)");
@@ -193,21 +196,21 @@ public class ModDiscoverer {
                             if (cache != null) {
                                 try {
                                     cache.store(jar, neo, recorded);
-                                    if (verbose) System.out.println("[Mirage]   · MID 缓存已写: " + neo.id);
+                                    if (verbose) MirageLog.LOADER.debug("  · MID 缓存已写: " + neo.id);
                                 } catch (IOException e) {
-                                    System.err.println("[Mirage] MID 缓存写入失败: " + e);
+                                    MirageLog.LOADER.warn("MID 缓存写入失败（不影响本次启动，下次仍走现场识别）", e);
                                 }
                             }
                         } else if (sandboxEnabled && recorded != null && verbose) {
-                            System.out.println("[Mirage][Sandbox] 命中缓存: " + neo.id
+                            MirageLog.LOADER.debug("[Sandbox] 命中缓存: " + neo.id
                                     + "（已录制，跳过沙盒）");
                         } else if (cached == null && cache != null) {
                             // 沙盒关闭：仍写 detected 缓存（保持旧行为，缓存元数据）
                             try {
                                 cache.store(jar, neo, recorded);
-                                if (verbose) System.out.println("[Mirage]   · MID 缓存已写: " + neo.id);
+                                if (verbose) MirageLog.LOADER.debug("  · MID 缓存已写: " + neo.id);
                             } catch (IOException e) {
-                                System.err.println("[Mirage] MID 缓存写入失败: " + e);
+                                MirageLog.LOADER.warn("MID 缓存写入失败（不影响本次启动，下次仍走现场识别）", e);
                             }
                         }
 
@@ -222,7 +225,7 @@ public class ModDiscoverer {
                         m.mainClass = neo.mainClass;
                         if (neo.depends != null && !neo.depends.isEmpty()) {
                             m.depends = new java.util.LinkedHashMap<>(neo.depends);
-                            System.out.println("[Mirage]   · " + neo.id + " 依赖(拓扑排序): "
+                            MirageLog.LOADER.debug("  · " + neo.id + " 依赖(拓扑排序): "
                                     + String.join(", ", neo.depends.keySet()));
                         }
                         Map<String, List<String>> eps = new java.util.LinkedHashMap<>();
@@ -233,12 +236,12 @@ public class ModDiscoverer {
                         c.fromNeoForge = true;
                         byId.put(neo.id, c);
                         result.add(c);
-                        System.out.println("[Mirage]   + 发现 (neoforge) " + c
+                        MirageLog.LOADER.debug("  + 发现 (neoforge) " + c
                                 + " [main=" + eps.get("main").size() + "]");
                         continue;
                     }
 
-                    System.out.println("[Mirage]   ! " + jar.getFileName() + " 没有 mod 描述符，跳过");
+                    MirageLog.LOADER.debug("! " + jar.getFileName() + " 没有 mod 描述符，跳过");
                 }
             }
         }

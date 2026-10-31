@@ -1,5 +1,7 @@
 package io.mirage.ls;
 
+import io.mirage.api.log.MirageLog;
+
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -203,7 +205,7 @@ public final class LsConfig {
         // 未知顶层 key → WARN（前向兼容，不 FATAL）
         for (Object k : rootMap.keySet()) {
             if (!Set.of("cycle", "ag", "record", "parse", "stages").contains(k)) {
-                System.out.println("[LS] WARN mirage.ls.json 含未知字段 \"" + k + "\"（已忽略）");
+                MirageLog.LS.warn("mirage.ls.json 含未知字段 \"" + k + "\"（已忽略，前向兼容）");
             }
         }
 
@@ -211,7 +213,7 @@ public final class LsConfig {
     }
 
     private static void fatal(String msg) {
-        System.err.println("[LS] FATAL " + msg);
+        MirageLog.LS.fatal(msg);
         System.exit(1);
     }
 

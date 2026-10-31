@@ -1,5 +1,7 @@
 package io.mirage.neoforge.runtime;
 
+import io.mirage.api.log.MirageLog;
+
 import net.neoforged.bus.api.Event;
 import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.IEventBus;
@@ -73,7 +75,7 @@ public final class NeoEventBusImpl implements IEventBus {
                 }
                 Class<?> eventType = m.getParameterTypes()[0];
                 if (!Event.class.isAssignableFrom(eventType)) {
-                    System.err.println("[Mirage:NeoBus] " + m + " 的参数不是 Event 子类，已跳过");
+                    MirageLog.of("Mirage:NeoBus").warn("" + m + " 的参数不是 Event 子类，已跳过");
                     continue;
                 }
                 m.setAccessible(true);
@@ -81,7 +83,7 @@ public final class NeoEventBusImpl implements IEventBus {
                 found++;
             }
         }
-        System.out.println("[Mirage:NeoBus] register " + target.getClass().getName()
+        MirageLog.of("Mirage:NeoBus").info("register " + target.getClass().getName()
                 + " -> " + found + " 个 @SubscribeEvent 方法");
     }
 
@@ -94,7 +96,7 @@ public final class NeoEventBusImpl implements IEventBus {
         for (CopyOnWriteArrayList<Listener> list : byType.values()) {
             list.removeAll(removed);
         }
-        System.out.println("[Mirage:NeoBus] unregister " + target.getClass().getName()
+        MirageLog.of("Mirage:NeoBus").info("unregister " + target.getClass().getName()
                 + " -> " + removed.size() + " 个监听器");
     }
 
@@ -159,7 +161,7 @@ public final class NeoEventBusImpl implements IEventBus {
                 l.invoke((Event) event);
                 any = true;
             } catch (Throwable t) {
-                System.err.println("[Mirage:NeoBus] 监听器 " + l.method + " 抛错: " + t);
+                MirageLog.of("Mirage:NeoBus").warn("监听器 " + l.method + " 抛错", t);
                 Throwable cause = t.getCause();
                 if (cause != null) {
                     cause.printStackTrace();

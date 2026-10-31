@@ -2,6 +2,7 @@ package io.mirage.loader;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import io.mirage.api.log.MirageLog;
 
 import java.io.IOException;
 import java.io.Reader;
@@ -69,8 +70,8 @@ public final class MidCache {
         try {
             Files.createDirectories(cacheRoot);
         } catch (IOException e) {
-            System.err.println("[MidCache] 无法创建缓存目录 " + cacheRoot + ": " + e
-                    + "（本次启动全部走现场识别，不报错）");
+            MirageLog.MIDCACHE.warn("无法创建缓存目录 " + cacheRoot
+                    + "（本次启动全部走现场识别，功能不受影响）", e);
         }
     }
 

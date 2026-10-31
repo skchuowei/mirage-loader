@@ -1,5 +1,7 @@
 package io.mirage.loader;
 
+import io.mirage.api.log.MirageLog;
+
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -30,7 +32,7 @@ public final class IrDescriptorParser {
         try (InputStreamReader reader = new InputStreamReader(in, StandardCharsets.UTF_8)) {
             root = JsonParser.parseReader(reader).getAsJsonObject();
         } catch (Exception e) {
-            System.err.println("[Mirage] IR 描述符解析失败: " + e);
+            MirageLog.LOADER.warn("IR 描述符解析失败（该 jar 将回退 legacy 检查）", e);
             return null;
         }
 
@@ -39,7 +41,7 @@ public final class IrDescriptorParser {
 
         JsonObject mod = optObject(root, "mod");
         if (mod == null) {
-            System.out.println("[Mirage] IR 缺少 mod 对象，描述符无效");
+            MirageLog.LOADER.warn("IR 描述符缺少 mod 对象，视为无效");
             return null;
         }
         r.id = optString(mod, "id");
@@ -63,7 +65,7 @@ public final class IrDescriptorParser {
         // unresolved：不阻断加载，WARN 一次即可
         JsonArray unresolved = optArray(root, "unresolved");
         if (unresolved != null && !unresolved.isEmpty()) {
-            System.out.println("[Mirage]   ! IR 未解析条目 " + unresolved.size()
+            MirageLog.LOADER.debug("  ! IR 未解析条目 " + unresolved.size()
                     + " 条（沙箱待补，不阻断）mod=" + r.id);
         }
         // 诊断字段 classes/methodCalls/mixinTargets/_stats/_diagnostics：不读、不校验。

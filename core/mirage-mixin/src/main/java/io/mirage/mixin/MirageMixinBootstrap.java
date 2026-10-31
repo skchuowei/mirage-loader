@@ -1,5 +1,7 @@
 package io.mirage.mixin;
 
+import io.mirage.api.log.MirageLog;
+
 import org.spongepowered.asm.launch.MixinBootstrap;
 import org.spongepowered.asm.mixin.MixinEnvironment;
 import org.spongepowered.asm.mixin.transformer.IMixinTransformer;
@@ -24,7 +26,7 @@ public final class MirageMixinBootstrap {
             Thread.currentThread().setContextClassLoader(mcl);
             MirageMixinService.bind(mcl);
 
-            System.out.println("[Mirage-Mixin] MixinBootstrap.init() ...");
+            MirageLog.MIXIN.info("MixinBootstrap.init() ...");
             MixinBootstrap.init();
 
             MixinEnvironment env = MixinEnvironment.getDefaultEnvironment();
@@ -37,7 +39,7 @@ public final class MirageMixinBootstrap {
 
             for (String c : configs) {
                 env.addConfiguration(c);
-                System.out.println("[Mirage-Mixin] 注册 mixin config: " + c);
+                MirageLog.MIXIN.info("注册 mixin config: " + c);
             }
 
             // 强制 processor 加载 pendingConfigs（在我们的环境里 addConfiguration 后不会自动触发）
@@ -49,7 +51,7 @@ public final class MirageMixinBootstrap {
                 selectMethod.setAccessible(true);
                 selectMethod.invoke(processor, env);
             } catch (Throwable t) {
-                System.err.println("[Mirage-Mixin] 触发 config 加载失败: " + t);
+                MirageLog.MIXIN.warn("触发 config 加载失败", t);
             }
 
             initialized = true;
@@ -67,7 +69,7 @@ public final class MirageMixinBootstrap {
             transformCount++;
             boolean changed = (result != null && result != basicClass && result.length != basicClass.length);
             if (changed || transformCount <= 5) {
-                System.out.println("[Mirage-Mixin] transform #" + transformCount + ": " + name
+                MirageLog.MIXIN.info("transform #" + transformCount + ": " + name
                     + " in=" + basicClass.length + " out=" + (result == null ? "null" : result.length)
                     + (changed ? " [MODIFIED]" : ""));
             }
@@ -75,7 +77,7 @@ public final class MirageMixinBootstrap {
         } catch (Throwable th) {
             // 必须打印完整堆栈：Mixin 抛出的是包装异常（"An unexpected critical error..."），
             // 根因在 cause 链里，只打 th.toString() 会丢失现场（见 AGENTS.md §8）。
-            System.err.println("[Mirage-Mixin] 转换 " + name + " 失败: " + th);
+            MirageLog.MIXIN.warn("转换 " + name + " 失败", th);
             th.printStackTrace();
             return basicClass;
         }

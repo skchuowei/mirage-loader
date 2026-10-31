@@ -1,5 +1,7 @@
 package io.mirage.ls.stage;
 
+import io.mirage.api.log.MirageLog;
+
 import io.mirage.api.Mirage;
 import io.mirage.eventbus.EventBus;
 import io.mirage.eventbus.EventBusHandleImpl;
@@ -59,7 +61,7 @@ public final class ParseStage implements Stage {
             Mirage.bootstrap(provider);
             // P1.5：设置 NeoForge 配置目录 <gameDir>/config，供 ModLoadingContext 读取 .toml
             net.neoforged.fml.ModLoadingContext.setConfigDirectory(ctx.gameDir().resolve("config"));
-            System.out.println("[Mirage] 公共 API 门面已就绪 (loader v" + LifecycleStarter.VERSION
+            MirageLog.MIRAGE.info("公共 API 门面已就绪 (loader v" + LifecycleStarter.VERSION
                     + ", mods=" + mods.size() + ", dist=" + ctx.dist() + ")");
 
             ctx.properties().put("S2.eventBus", eventBus);
@@ -67,9 +69,8 @@ public final class ParseStage implements Stage {
 
             return applyParseFailPolicy(ctx, mods);
         } catch (Throwable t) {
-            System.err.println("[Mirage] 启动 Minecraft 时发生致命错误:");
-            t.printStackTrace();
-            return StageOutcome.fatal(t.toString());
+            MirageLog.MIRAGE.error("启动 Minecraft 时发生致命错误", t);
+            return StageOutcome.fatal(MirageLog.summary(t));
         }
     }
 
@@ -91,17 +92,17 @@ public final class ParseStage implements Stage {
         if (unresolved.isEmpty()) {
             return StageOutcome.success();
         }
-        System.out.println("[LS] ParseFailPolicy=" + policy.logName() + "：检测到 " + unresolved.size()
+        MirageLog.LS.raw("[LS] ParseFailPolicy=" + policy.logName() + "：检测到 " + unresolved.size()
                 + " 个无法完全解析的 mod（主类定位失败：无 @Mod 注解、无可用入口）");
         for (ModContainer m : unresolved) {
-            System.out.println("[LS]   ! " + m.manifest.id + " v" + m.manifest.version
+            MirageLog.LS.warn("! " + m.manifest.id + " v" + m.manifest.version
                     + " [" + m.jarFile.getFileName() + "]");
         }
         switch (policy) {
             case SKIP -> {
                 for (ModContainer m : unresolved) {
                     ctx.skippedMods().add(m.manifest.id);
-                    System.out.println("[Mirage] WARN 按 ParseFailPolicy=skip 跳过无法解析的 mod: " + m.manifest.id);
+                    MirageLog.MIRAGE.warn("按 ParseFailPolicy=skip 跳过无法解析的 mod: " + m.manifest.id);
                 }
                 return StageOutcome.success();
             }
@@ -110,21 +111,21 @@ public final class ParseStage implements Stage {
                         + " 个 mod 无法完全解析（主类定位失败），清单见上。补齐入口，或改用 skip/confirm 策略");
             }
             case CONFIRM -> {
-                System.out.println("[LS] 请选择：[Y] 继续启动（这些 mod 仍会被跳过并记 WARN） / [S] 跳过这些 mod 并继续 / [N] 中止启动");
+                MirageLog.LS.raw("[LS] 请选择：[Y] 继续启动（这些 mod 仍会被跳过并记 WARN） / [S] 跳过这些 mod 并继续 / [N] 中止启动");
                 String line = readLine();
                 if (line == null) {
                     return StageOutcome.fatal("无人值守环境（无控制台）无法交互确认，按无人值守策略降级为 crash");
                 }
                 switch (line.trim().toUpperCase(Locale.ROOT)) {
                     case "Y" -> {
-                        System.out.println("[LS] 用户选择继续启动（这些 mod 将在 S6 跳过并记 WARN）");
+                        MirageLog.LS.info("用户选择继续启动（这些 mod 将在 S6 跳过并记 WARN）");
                         return StageOutcome.success();
                     }
                     case "S" -> {
                         for (ModContainer m : unresolved) {
                             ctx.skippedMods().add(m.manifest.id);
                         }
-                        System.out.println("[LS] 已按用户选择跳过 " + unresolved.size() + " 个无法解析的 mod");
+                        MirageLog.LS.info("已按用户选择跳过 " + unresolved.size() + " 个无法解析的 mod");
                         return StageOutcome.success();
                     }
                     default -> {

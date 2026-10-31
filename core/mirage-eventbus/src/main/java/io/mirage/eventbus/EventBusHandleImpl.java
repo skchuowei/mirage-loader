@@ -1,5 +1,7 @@
 package io.mirage.eventbus;
 
+import io.mirage.api.log.MirageLog;
+
 import io.mirage.api.bus.EventBusHandle;
 
 import java.lang.reflect.Method;
@@ -31,8 +33,8 @@ public final class EventBusHandleImpl implements EventBusHandle {
     public void unregister(Object listener) {
         // core EventBus 当前没实现反注册；M4 后补。
         // 这里打个占位日志，避免 Mod 以为 unregister 生效了。
-        System.out.println("[Mirage] WARN: EventBus.unregister() 暂未实现，"
-                + listener.getClass().getName() + " 的监听器仍会被保留。");
+        MirageLog.MIRAGE.warn("EventBus.unregister() 暂未实现，"
+                + listener.getClass().getName() + " 的监听器仍会被保留");
     }
 
     @Override

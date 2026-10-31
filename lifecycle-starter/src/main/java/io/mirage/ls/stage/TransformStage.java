@@ -1,5 +1,7 @@
 package io.mirage.ls.stage;
 
+import io.mirage.api.log.MirageLog;
+
 import io.mirage.loader.ModContainer;
 import io.mirage.loader.MirageClassLoader;
 import io.mirage.loader.MirageDebug;
@@ -48,13 +50,13 @@ public final class TransformStage implements Stage {
                 if (!e.isEmpty()) urlList.add(new java.io.File(e).toURI().toURL());
             }
             URL[] urls = urlList.toArray(new URL[0]);
-            System.out.println("[Mirage] 创建 MirageClassLoader，" + urls.length + " 个 URL");
+            MirageLog.MIRAGE.info("创建 MirageClassLoader，" + urls.length + " 个 URL");
             MirageClassLoader mcl = new MirageClassLoader(urls, ClassLoader.getSystemClassLoader().getParent());
 
             // 把每个 Mod jar 加入 classloader
             for (ModContainer mod : mods) {
                 mcl.addJar(mod.jarFile.toFile());
-                System.out.println("[Mirage] 添加 mod jar: " + mod.jarFile.getFileName());
+                MirageLog.MIRAGE.debug("添加 mod jar: " + mod.jarFile.getFileName());
             }
 
             // ---- 初始化 SpongePowered Mixin 管线 ----
@@ -68,17 +70,17 @@ public final class TransformStage implements Stage {
                         if (name.endsWith(".mixin.json") && !name.contains("/")) {
                             String configName = name.substring(0, name.length() - ".mixin.json".length());
                             mixinConfigs.add(configName);
-                            System.out.println("[Mirage-Mixin] 发现 mixin config: " + configName + " (from " + mod.jarFile.getFileName() + ")");
+                            MirageLog.MIXIN.debug("发现 mixin config: " + configName + " (from " + mod.jarFile.getFileName() + ")");
                         }
                     }
                 } catch (Exception e) {
-                    System.err.println("[Mirage-Mixin] 扫描 mod jar 失败: " + e);
+                    MirageLog.MIXIN.warn("扫描 mod jar 失败（该 mod 的 mixin 不会生效）", e);
                 }
             }
             // 加上 loader 自身的 mixin config
             mixinConfigs.add("mirage.mixins.json");
             io.mirage.mixin.MirageMixinBootstrap.init(mcl, mixinConfigs);
-            System.out.println("[Mirage-Mixin] Mixin 管线初始化完成, " + mixinConfigs.size() + " 个 config");
+            MirageLog.MIXIN.info("Mixin 管线初始化完成, " + mixinConfigs.size() + " 个 config");
 
             // 同时把 mod jar 加入系统 classloader（AppClassLoader），
             // 因为 MC 类可能被 AppClassLoader 加载，资源系统用它的 getResource()
@@ -91,12 +93,12 @@ public final class TransformStage implements Stage {
                 java.lang.reflect.Method addURL = ucp.getClass().getMethod("addURL", java.net.URL.class);
                 for (ModContainer mod : mods) {
                     addURL.invoke(ucp, mod.jarFile.toUri().toURL());
-                    System.out.println("[Mirage] mod jar 已加入系统 classpath: " + mod.jarFile.getFileName());
+                    MirageLog.MIRAGE.debug("mod jar 已加入系统 classpath: " + mod.jarFile.getFileName());
                 }
             } catch (Exception e) {
                 // JDK25 内部 API 变更时此处失败（diag 日志里的 NoSuchFieldException: ucp）——
                 // 不 FATAL：资源查找还有 mcl.getResources 兜底路径。
-                System.err.println("[Mirage] 加入系统 classpath 失败: " + e);
+                MirageLog.MIRAGE.warn("mod jar 加入系统 classpath 失败（该 mod 的类可能无法链接）", e);
             }
 
             ctx.properties().put("S3.classLoader", mcl);
