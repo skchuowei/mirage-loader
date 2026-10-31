@@ -142,3 +142,70 @@ BUILD SUCCESSFUL in 16s
 
 - fat jar `build\mirage-launch-0.4.0.jar` 已用新模块类重打包（301991 字节，校验内含 `io/mirage/loader/IrDescriptorParser.class`）。
 - mdk mod jar 已装到 `mc-shili\versions\26.2-mirage\mods\mdk-example-1.0.0.jar`（jar 内同时含 `mod.mirage.json` 根描述符 + `META-INF/mirage.mod.json` legacy 描述符；运行时会优先走 IR 路径，日志行应为 `+ discovered (IR 0.1) mdk-example v1.0.0 ...`）。
+
+## Fabric 运行时补全（2026-10-25，P0 核心切片）
+
+- 目标：让"只注册 lifecycle 回调 / 只有 ModInitializer"的极简 Fabric mod 能跑通；补齐 `mirage-fabric-compat` 一直缺位的"运行时 Fabric API 桥接 stub"（其 `build.gradle.kts` description 早就声明要含"运行时 Fabric API 桥接 stub"，但此前只有 `ModsJsonParser`/`OutputModel` 两个静态分析类）。
+- 新增 `net.fabricmc.fabric.api.event.Event`（抽象类，MC 无关）+ `EventFactory`（array-backed 实现，镜像 Fabric Apache 2.0 公开接口，clean-room 再实现）。
+- 新增 `api/event/lifecycle/v1/ServerLifecycleEvents`（Starting/Started/Stopping/Stopped）+ `api/client/event/lifecycle/v1/ClientLifecycleEvents`（Starting/Started/Stopping，保留 STARTING 兼容旧 mod）。
+- 新增 `io.mirage.fabric.runtime.FabricLifecycleBridge`（镜像 `NeoForgeEventBridge`）：静态 `fireXxx` 直接调 `Event.invoker().onXxx(...)`，Fabric 是回调式事件无需 mod bus。
+- 新增 `FabricClientLifecycleMixin`（`Minecraft.<init>` RETURN → CLIENT_STARTING；`Minecraft.run` HEAD → CLIENT_STARTED）+ `FabricServerLifecycleMixin`（`MinecraftServer.<init>` RETURN → SERVER_STARTING；`MinecraftServer.runServer` HEAD → SERVER_STARTED），已登记进 `mirage.mixins.json`（client / 通用 两段）。
+- `modules/mirage-fabric-compat/build.gradle.kts` 加 MC 26.2 `compileOnly` + toolchain 25（生命周期事件引用 MC 真类，与 neoforge-compat 同款）。
+- `launcher/mirage-launch/build.gradle.kts` 加 `implementation(:modules:mirage-fabric-compat)`，使 `net.fabricmc.*` 随启动 jar 进 `mcl` 运行时 classpath（与 neoforge-compat 同机制，否则 mod 链接期 `NoClassDefFoundError`）。
+- 缺口与后续（关闭路径 firing、fabric-api-events 回调事件、registry/network/resource）见 `docs/Fabric兼容层缺口清单.md`。
+
+## Fabric 运行时 P0 关闭路径补全（2026-10-25）
+
+- 目标：闭合 P0 缺口清单第 1 项"lifecycle 关闭路径缺失"——此前 CLIENT_STOPPING / SERVER_STOPPING / SERVER_STOPPED 事件类已定义、桥已就绪，但无代码 fire。
+- `FabricServerLifecycleMixin` 重写：SERVER_STARTING 改为 `runServer` 中 `initServer()Z` 调用前；SERVER_STARTED 改为 `runServer` 中 `buildServerStatus()` 首次调用处（对齐 fabric-lifecycle-events-v1 MinecraftServerMixin）；新增 `stopServer()` HEAD → SERVER_STOPPING、TAIL → SERVER_STOPPED。
+- `FabricClientLifecycleMixin` 重写：CLIENT_STARTED 改为 `run()` 中 `gameThread` 字段 PUTFIELD 之后（对齐 Fabric，getRunningThread 此时可用）；新增 `exitWorldAndClose()` HEAD → CLIENT_STOPPING；CLIENT_STARTING 仍保留 `<init>` RETURN（兼容旧 mod）。
+- 注入点均用 `javap`(JDK25) 在 26.2.jar 核对方法/字段真实存在（`stopServer`、`exitWorldAndClose`、`initServer`、`buildServerStatus`、`gameThread`），`require=1` 不会落空。
+- 结果：Fabric `lifecycle-v1` 六个事件全部 firing，极简 Fabric mod 的"注册关闭回调保存/释放资源"路径打通。
+- 编译验证：`.gradle-dist/gradle-9.1.0` + JDK 25 离线 `gradle build` → BUILD SUCCESSFUL（47 tasks）。
+
+## Fabric 运行时 P1 补全（2026-10-25）
+
+- 目标：闭合缺口清单 P1 四项（data/ 注册、client tick 事件、play 阶段网络、server entrypoints）。
+  所有新增 Mixin 注入点均先用 JDK25 `javap` 在 `mc-shili/versions/26.2/26.2.jar` 核对真实存在（`require=1` 不会落空）。
+
+### P1-5 data/ 数据包注册
+- `MirageDebug.exposeModNamespaces`：除 `assets/`(CLIENT_RESOURCES) 外新增解析 SERVER_DATA 包类型；
+  每个 mod jar 提取后整目录 `pushRootPath` + 按类型 `pushPathForType`（assets/data 各按需 push）。
+- `extractAssets` 提取范围从 `assets/` 扩到 `assets/` + `data/`；无两者之一的 mod 打日志跳过。
+
+### P1-6 client tick 事件（fabric-api-events 首切片）
+- 新增 `net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents`（START/END_CLIENT_TICK、
+  START/END_LEVEL_TICK，镜像 refs 签名）+ `io.mirage.fabric.runtime.FabricClientTickBridge`。
+- 新增 `FabricClientTickMixin`（`Minecraft.tick()` HEAD/TAIL）与 `FabricClientLevelTickMixin`
+  （`ClientLevel.tick(BooleanSupplier)` HEAD/TAIL）。
+- 注：该版本 fabric-api refs 无 `ClientWorldEvents`（更名/移除），未实现；其余 client 回调归 P0-2。
+
+### P1-4 fabric-api-network（play 阶段）
+- 新增 API 表面（clean-room 镜像 refs 签名，Apache-2.0 参考）：
+  `networking/v1/`：`ServerPlayConnectionEvents`、`ServerPlayNetworking`、`PacketSender`、`PayloadTypeRegistry`；
+  `client/networking/v1/`：`ClientPlayNetworking`、`ClientPlayConnectionEvents`。
+- 新增 `io.mirage.fabric.runtime.FabricNetworkingBridge`：receiver 登记表（global + per-listener，
+  WeakHashMap）、payload 类型表、真实发包（`Connection.send`）、`handleCustomPayload` HEAD 派发
+  （消费则 cancel）、INIT/JOIN/DISCONNECT 连接事件派发、`PacketSender` 双端实现。
+- 新增 4 个 Mixin：`FabricServerPlayConnectionMixin`（`PlayerList.placeNewPlayer` HEAD/TAIL）、
+  `FabricServerPayloadMixin`（`ServerGamePacketListenerImpl.onDisconnect` + `handleCustomPayload`）、
+  `FabricClientPlayConnectionMixin`（`ClientPacketListener.<init>`/`handleLogin`/`onDisconnect`）、
+  `FabricClientPayloadMixin`（`ClientPacketListener.handleCustomPayload`）。
+- 客户端带 `ChannelFutureListener` 的发送：26.2 `ClientCommonPacketListenerImpl` 只有单参 `send(Packet<?>)`，
+  改反射取继承链上的 `Connection` 字段走 `connection.send(packet, callback)`。
+- 已知限制（原版 payload codec 未注册 / 无 packetContext / canSend 近似 / reconfigure 空操作 /
+  registerLarge 未分包 / login 阶段未做）见 `docs/Fabric兼容层缺口清单.md` 文末汇总。
+
+### P1-7 server entrypoints
+- `Launcher` 新增 `DIST` 判定（`-Dmirage.dist=server` 或 `MIRAGE_DIST=server`，默认 CLIENT）：
+  客户端 dist 跳过 server-only mod 只跑 main+client 入口（原行为）；服务端 dist 跳过 client-only mod，
+  跑 main+server 入口（实例化 + eventBus 注册 + `ModInitializer.onInitialize()`，对齐 Fabric 语义）。
+  `MirageProviderImpl` 的 dist 参数从硬编码 `Dist.CLIENT` 改为 `DIST`。
+
+### 接线与验证
+- `mirage.mixins.json`：通用段 +2（ServerPlayConnection/Payload），client 段 +4（ClientTick/ClientLevelTick/ClientPlayConnection/ClientPayload）。
+- `modules/mirage-fabric-compat/build.gradle.kts`：补 netty（transport/buffer/common）+ jspecify compileOnly
+  （`PacketSender` 引用 `ChannelFutureListener`；26.2 类文件签名带 jspecify 注解）。
+- `core/mirage-mixin/build.gradle.kts`：补 netty compileOnly（Mixin 经桥类间接引用 netty 类型）。
+- 编译验证：`.gradle-dist/gradle-9.1.0` + JDK 25 离线 `gradle build` → BUILD SUCCESSFUL（47 tasks）。
+- **未做**：git 提交（按基线待用户确认）；运行时冒烟（需真实 Fabric mod 双击 bat 两次）。

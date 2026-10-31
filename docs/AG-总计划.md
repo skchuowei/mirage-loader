@@ -62,12 +62,13 @@ AG
 **范围（高频子集，不做全量）：**
 - [x] fabric.mod.json 解析（已有 FabricModManifest）
 - [x] ModInitializer / ClientModInitializer 接口（已有）
-- [ ] entrypoints 实际反射调用（运行时 agent 在补）
-- [ ] fabric-api-lifecycle-v1：服务器/客户端生命周期事件
-- [ ] fabric-api-events：基础事件（客户端启动、服务端启动）
-- [ ] fabric-api-registry：注册事件（DeferredRegister 的 Fabric 版）
-- [ ] fabric-api-network：网络包（先做最简单的 S2C/C2S）
-- [ ] fabric-api-resource：资源包/数据包（后置）
+- [x] entrypoints 实际反射调用（`Launcher.callOnInitialize` + client 侧分派，runtime-wiring 已接通）
+- [x] fabric-api-lifecycle-v1 核心：`ServerLifecycleEvents` + `ClientLifecycleEvents`（Event/EventFactory 抽象类 + 6 个 lifecycle 事件 + `FabricLifecycleBridge` + 2 个 Mixin 接线；2026-10-25 落地，详见 `docs/Fabric兼容层缺口清单.md`）
+- [~] fabric-api-events：基础回调事件（20+ 类）——**P1-6 首切片已落地**：`ClientTickEvents` 四事件（START/END_CLIENT_TICK + START/END_LEVEL_TICK）+ 2 个 Mixin；其余回调类（AttackEntityCallback / UseBlockCallback / ServerTickEvents 等）仍缺，归 P0-2
+- [ ] fabric-api-registry：注册事件（RegistryEntryAddedCallback / FabricRegistryBuilder 桥接）
+- [x] fabric-api-network：play 阶段网络包（ServerPlayConnectionEvents / ClientPlayConnectionEvents / ServerPlayNetworking / ClientPlayNetworking / PacketSender / PayloadTypeRegistry + `FabricNetworkingBridge` + 4 个 Mixin；send 走真实 Connection；2026-10-25 P1-4 落地，已知限制见缺口清单文末汇总）
+- [x] fabric-api-resource：资源包/数据包（assets 已接；data/ 经 SERVER_DATA push 进数据包管线，2026-10-25 P1-5 落地）
+- [x] entrypoints.server 侧：`Launcher.DIST` 判定 + 专用服务端路径实例化 `entrypoints.server`（P1-7；PCL 场景恒 CLIENT，服务端为前瞻接线）
 
 **验收**：10 个小型 Fabric mod 中至少 5 个能跑。
 
