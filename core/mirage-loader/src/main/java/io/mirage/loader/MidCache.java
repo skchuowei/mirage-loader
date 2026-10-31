@@ -30,7 +30,7 @@ public final class MidCache {
 
     /** 缓存文件头 + 载荷。Gson 可序列化。 */
     public static final class Entry {
-        public String specVersion;        // 固定 "0.2"（0.1 → 0.2 引入 recorded 可选字段）
+        public String specVersion;        // 固定 "0.3"（0.2 → 0.3 引入 fakeVersion / incomplete）
         public String agVersion;          // = NeoForgeModDetector.AG_VERSION
         public String mcVersion;          // 如 "26.2"
         public String jarSha256;          // mod jar 全文件 SHA-256（hex）
@@ -39,6 +39,12 @@ public final class MidCache {
 
         /** 沙盒录制结果（MSR-neo）。null = 老缓存未录制过，需补录。 */
         public Recorded recorded;
+
+        /**
+         * 录制时的 fake 表面指纹（{@code SandboxRecorder.fakeVersion()}）。null = 0.2 老缓存。
+         * 只在 {@link #recorded} 非 null 时校对：检测结果本身不依赖 fake 表面，不该被连坐失效。
+         */
+        public String fakeVersion;
     }
 
     /**
@@ -54,6 +60,11 @@ public final class MidCache {
         public long record_duration_ms;         // 沙盒耗时
         public boolean failed;                  // 构造是否崩 / 超时
         public String error;                    // failed=true 时填异常类名 + message；否则 null
+        /**
+         * 录制未完成（超时中断）。true 时 {@code touched_apis} 等一律为空 ——
+         * 半成品不入库，调用方也不应把它当有效录制结果。
+         */
+        public boolean incomplete;
     }
 
     private final Path cacheRoot;
@@ -103,6 +114,14 @@ public final class MidCache {
                     if (!NeoForgeModDetector.AG_VERSION.equals(e.agVersion)) continue;
                     if (!jarSha.equals(e.jarSha256)) continue;
                     if (!mcVersion.equals(e.mcVersion)) continue;
+                    // 第四件套：录制结果还要跟 fake 表面版本对齐（表面扩充后老 recorded 作废重录）
+                    if (e.recorded != null
+                            && !io.mirage.loader.sandbox.SandboxRecorder.fakeVersion().equals(e.fakeVersion)) {
+                        MirageLog.MIDCACHE.debug("fake 表面已变更（缓存 " + e.fakeVersion
+                                + " ≠ 当前 " + io.mirage.loader.sandbox.SandboxRecorder.fakeVersion()
+                                + "），重录: " + e.detected.id);
+                        continue;
+                    }
                     // modIdHint 若提供，必须匹配
                     if (modIdHint != null && !modIdHint.equals(e.detected.id)) continue;
                     return e;
@@ -130,13 +149,14 @@ public final class MidCache {
         if (!Files.isDirectory(cacheRoot)) return;
         String jarSha = sha256(jar);
         Entry e = new Entry();
-        e.specVersion = "0.2";
+        e.specVersion = "0.3";
         e.agVersion = NeoForgeModDetector.AG_VERSION;
         e.mcVersion = mcVersion;
         e.jarSha256 = jarSha;
         e.cachedAt = System.currentTimeMillis();
         e.detected = d;
         e.recorded = recorded;
+        e.fakeVersion = (recorded != null) ? io.mirage.loader.sandbox.SandboxRecorder.fakeVersion() : null;
 
         String safeId = d.id.replaceAll("[^a-zA-Z0-9_.-]", "_");
         Path out = cacheRoot.resolve(safeId + "+" + jarSha.substring(0, 16) + ".json");

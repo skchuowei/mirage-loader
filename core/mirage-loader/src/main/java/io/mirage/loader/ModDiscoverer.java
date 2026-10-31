@@ -192,10 +192,17 @@ public class ModDiscoverer {
                                         + recorded.touched_apis.size() + " apis, "
                                         + recorded.registered_events.size() + " events)");
                             }
-                            // 写回缓存
+                            // 写回缓存。incomplete（超时中断）时不写 recorded：
+                            // 半成品数据一旦入库，后续启动会把它当成有效录制，错误永久固化。
                             if (cache != null) {
                                 try {
-                                    cache.store(jar, neo, recorded);
+                                    if (recorded.incomplete) {
+                                        MirageLog.LOADER.warn("[Sandbox] " + neo.id
+                                                + " 录制不完整，本次只缓存元数据（下次启动会重录）");
+                                        cache.store(jar, neo, null);
+                                    } else {
+                                        cache.store(jar, neo, recorded);
+                                    }
                                     if (verbose) MirageLog.LOADER.debug("  · MID 缓存已写: " + neo.id);
                                 } catch (IOException e) {
                                     MirageLog.LOADER.warn("MID 缓存写入失败（不影响本次启动，下次仍走现场识别）", e);
