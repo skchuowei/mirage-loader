@@ -296,7 +296,7 @@ public class ModDiscoverer {
         Path desc = dir.resolve(IR_DESC_ROOT);
         IrDescriptorParser.IrResult ir;
         try (InputStream in = Files.newInputStream(desc)) {
-            ir = IrDescriptorParser.parse(in);
+            ir = IrDescriptorParser.parseScriptDescriptor(in);
         } catch (Exception e) {
             MirageLog.LOADER.warn("! 脚本目录 " + dir.getFileName() + " 的描述符读取失败，已跳过", e);
             return null;

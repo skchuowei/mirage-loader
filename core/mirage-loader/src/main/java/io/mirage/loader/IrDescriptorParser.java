@@ -28,31 +28,56 @@ import java.util.Map;
 public final class IrDescriptorParser {
 
     public static IrResult parse(InputStream in) {
-        JsonObject root;
+        JsonObject root = readRoot(in);
+        if (root == null) return null;
+        IrResult r = fromRoot(root);
+        if (r == null) {
+            MirageLog.LOADER.warn("IR 描述符缺少 mod 对象，视为无效");
+        }
+        return r;
+    }
+
+    /**
+     * 脚本目录 mod（MGScript）专用：描述符是人手写的 JSON，允许两种形态——
+     * <ol>
+     *   <li>IR 契约形态（{@code mod} 嵌套对象，jar mod 由工具产出的同款）；</li>
+     *   <li>扁平形态：{@code id}/{@code version}/{@code entrypoints} 直接放根级
+     *       （手写最直观，类似 fabric.mod.json）。</li>
+     * </ol>
+     * jar 路径不走这里，IR 契约不受影响。
+     */
+    public static IrResult parseScriptDescriptor(InputStream in) {
+        JsonObject root = readRoot(in);
+        if (root == null) return null;
+        IrResult r = fromRoot(root);
+        if (r != null) return r;
+        return fromFlat(root);
+    }
+
+    private static JsonObject readRoot(InputStream in) {
         try (InputStreamReader reader = new InputStreamReader(in, StandardCharsets.UTF_8)) {
-            root = JsonParser.parseReader(reader).getAsJsonObject();
+            return JsonParser.parseReader(reader).getAsJsonObject();
         } catch (Exception e) {
             MirageLog.LOADER.warn("IR 描述符解析失败（该 jar 将回退 legacy 检查）", e);
             return null;
         }
+    }
+
+    /** IR 契约形态；没有 {@code mod} 对象返回 null（由调用方决定回退还是报无效）。 */
+    private static IrResult fromRoot(JsonObject root) {
+        if (root == null) return null;
+        JsonObject mod = optObject(root, "mod");
+        if (mod == null) return null;
 
         IrResult r = new IrResult();
         r.specVersion = optString(root, "mirageSpecVersion");
 
-        JsonObject mod = optObject(root, "mod");
-        if (mod == null) {
-            MirageLog.LOADER.warn("IR 描述符缺少 mod 对象，视为无效");
-            return null;
-        }
         r.id = optString(mod, "id");
         r.version = optString(mod, "version");
         r.group = optString(mod, "group");
         r.environment = optString(mod, "environment");
 
-        JsonObject eps = optObject(mod, "entrypoints");
-        r.entrypoints.put("main", stringList(eps, "main"));
-        r.entrypoints.put("client", stringList(eps, "client"));
-        r.entrypoints.put("server", stringList(eps, "server"));
+        fillEntrypoints(mod, r);
 
         // 核心字段接住但暂不消费（A5/A3/后端注册阶段才会用）
         r.dependencies = optArray(root, "dependencies");
@@ -70,6 +95,26 @@ public final class IrDescriptorParser {
         }
         // 诊断字段 classes/methodCalls/mixinTargets/_stats/_diagnostics：不读、不校验。
         return r;
+    }
+
+    /** 手写扁平形态：id/version/entrypoints 在根级。 */
+    private static IrResult fromFlat(JsonObject root) {
+        IrResult r = new IrResult();
+        r.id = optString(root, "id");
+        r.version = optString(root, "version");
+        r.environment = optString(root, "environment");
+        fillEntrypoints(root, r);
+        return r;
+    }
+
+    private static void fillEntrypoints(JsonObject mod, IrResult r) {
+        JsonObject eps = optObject(mod, "entrypoints");
+        r.entrypoints.put("main", stringList(eps, "main"));
+        r.entrypoints.put("client", stringList(eps, "client"));
+        r.entrypoints.put("server", stringList(eps, "server"));
+        // script：MGScript 入口（如 ["scripts/main.mgs"]）。有它就意味着这是脚本 mod，
+        // S6 会走脚本分支而不是找 Java 主类（见 ModInitStage 的 scriptRoot 判断）。
+        r.entrypoints.put("script", stringList(eps, "script"));
     }
 
     /** IR 解析结果。未消费的核心字段以原始 JsonArray 形态挂在容器上，供后续阶段取用。 */
