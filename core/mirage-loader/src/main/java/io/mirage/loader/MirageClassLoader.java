@@ -57,6 +57,19 @@ public class MirageClassLoader extends URLClassLoader {
                 && !name.startsWith("io.mirage.mgscript.")) {
             return ClassLoader.getSystemClassLoader().loadClass(name);
         }
+        // org.lwjgl.* 强制走 SystemClassLoader（2026-10-31，视角转不动回归）。
+        // 本 loader 的 parent 是 platform loader（不含 lwjgl），URL 却是整条游戏 classpath，
+        // 于是 MCL 会自己 define 一份 org.lwjgl.glfw.GLFW——与早期窗口（AppClassLoader 那份）
+        // 形成两份 GLFW 类、各自绑定一份 glfw.dll 模块（日志特征：MemoryUtil 被
+        // lwjgl-unsafe-agent 重写两次，sameGlfwClass=false）。后果：窗口由 GLFW-A 创建，
+        // MC 的 glfwSetInputMode(GLFW_CURSOR_DISABLED) 打在 GLFW-B 上，只把 B 的
+        // _glfw.win32.disabledCursorWindow 置位；真正处理 WM_MOUSEMOVE 的是 A 的 WndProc，
+        // 它查 A 的 disabledCursorWindow（仍为 NULL）直接丢弃——光标事件零派发、视角转不动，
+        // 而 WM_LBUTTONDOWN/WM_KEYDOWN 不查该标记所以点击和键盘正常。与 io.mirage.* 同因，
+        // 统一 loader 后两份 GLFW 合一、_glfw 全局共享，输入恢复。
+        if (name.startsWith("org.lwjgl.")) {
+            return ClassLoader.getSystemClassLoader().loadClass(name);
+        }
         // java.*/javax.*/jdk.* 走 parent
         if (name.startsWith("java.")
                 || name.startsWith("javax.") || name.startsWith("jdk.")) {
