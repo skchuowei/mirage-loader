@@ -13,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.jar.JarEntry;
@@ -66,10 +67,28 @@ public class ModDiscoverer {
         int fakePasses = 0;
         int skippedPasses = 0;
         try (var stream = Files.list(modsDir)) {
-            var jars = stream.filter(p -> p.getFileName().toString().endsWith(".jar")).toList();
-            MirageLog.LOADER.info("扫描 " + jars.size() + " 个 jar，目录: " + modsDir);
+            // 目录形态的脚本 mod：`mods/<name>/mod.mirage.json`（含 scripts/*.mgs）。
+            // 只认「目录里确实有描述符」的目录，避免把用户的备份夹/截图夹当成 mod。
+            var jars = stream.filter(p -> p.getFileName().toString().endsWith(".jar")
+                            || (Files.isDirectory(p) && Files.isRegularFile(p.resolve(IR_DESC_ROOT))))
+                    .toList();
+            long dirCount = jars.stream().filter(Files::isDirectory).count();
+            MirageLog.LOADER.info("扫描 " + (jars.size() - dirCount) + " 个 jar，"
+                    + dirCount + " 个脚本目录，目录: " + modsDir);
 
             for (Path jar : jars) {
+                if (Files.isDirectory(jar)) {
+                    // 变量名沿用 jar（避免整段重命名），此处它实际是 mod 根目录
+                    ModContainer c = discoverScriptDir(jar);
+                    if (c != null) {
+                        if (byId.containsKey(c.manifest.id)) {
+                            throw new IOException("Duplicate mod id '" + c.manifest.id + "'");
+                        }
+                        byId.put(c.manifest.id, c);
+                        result.add(c);
+                    }
+                    continue;
+                }
                 try (JarFile jf = new JarFile(jar.toFile())) {
                     // ---- 1. IR 层 mod.mirage.json ----
                     JarEntry irEntry = jf.getJarEntry(IR_DESC_ROOT);
@@ -264,6 +283,47 @@ public class ModDiscoverer {
                     + skippedPasses + " 个（理由见逐条 debug）");
         }
         return result;
+    }
+
+    /**
+     * 脚本目录 mod（MGScript）：只读目录根的 {@code mod.mirage.json}（IR 形态），
+     * 不认 jar、不做 NeoForge 探测、不参与 MID 缓存与沙盒录制（它不是字节码 mod）。
+     *
+     * <p>约定：{@code entrypoints.script} 必须非空，否则视为普通目录忽略——
+     * 否则任何带 mod.mirage.json 的目录都会被当成 mod，冲突时难排查。
+     */
+    private ModContainer discoverScriptDir(Path dir) {
+        Path desc = dir.resolve(IR_DESC_ROOT);
+        IrDescriptorParser.IrResult ir;
+        try (InputStream in = Files.newInputStream(desc)) {
+            ir = IrDescriptorParser.parse(in);
+        } catch (Exception e) {
+            MirageLog.LOADER.warn("! 脚本目录 " + dir.getFileName() + " 的描述符读取失败，已跳过", e);
+            return null;
+        }
+        if (ir == null || ir.id == null || ir.id.isEmpty()
+                || ir.version == null || ir.version.isEmpty()) {
+            MirageLog.LOADER.warn("! 脚本目录 " + dir.getFileName()
+                    + " 的 mod.mirage.json 无效（缺 id 或 version），已跳过");
+            return null;
+        }
+        List<String> scripts = ir.entrypoints.getOrDefault("script", List.of());
+        if (scripts.isEmpty()) {
+            MirageLog.LOADER.debug("! 目录 " + dir.getFileName()
+                    + " 有 mod.mirage.json 但没有 entrypoints.script，按普通目录忽略");
+            return null;
+        }
+
+        ModManifest m = new ModManifest();
+        m.id = ir.id;
+        m.version = ir.version;
+        m.name = ir.id;
+        m.side = mapIrEnvironment(ir.environment);
+        m.mainClass = null;              // 脚本 mod 没有 Java 主类
+        ModContainer c = new ModContainer(m, dir, new LinkedHashMap<>(ir.entrypoints), ir, dir);
+        MirageLog.LOADER.info("发现脚本 mod (MGScript): " + c
+                + " [script=" + scripts.size() + " 个入口]");
+        return c;
     }
 
     /** IR environment（BOTH/CLIENT/SERVER）→ ModManifest.side（both/client/server）。 */

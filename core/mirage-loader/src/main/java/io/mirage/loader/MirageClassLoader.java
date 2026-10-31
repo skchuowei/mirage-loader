@@ -37,10 +37,24 @@ public class MirageClassLoader extends URLClassLoader {
     @Override
     protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
         // io.mirage.* 强制走 SystemClassLoader，保证 Launcher 和 MC 渲染线程看到同一个类。
-        // 例外：io.mirage.neoforge.* 是 NeoForge 兼容层运行时实现（NeoEventBusImpl 等），
+        // 例外 1：io.mirage.neoforge.* 是 NeoForge 兼容层运行时实现（NeoEventBusImpl 等），
         // 必须和 mod 侧用同一个 MirageClassLoader 加载，否则它引用的 net.minecraft.* 类
         // 会出现"app loader 与 MirageClassLoader 各加载一份"的 loader constraint violation。
-        if (name.startsWith("io.mirage.") && !name.startsWith("io.mirage.neoforge.")) {
+        // 例外 2（2026-10-31）：io.mirage.fabric.* 同理——Fabric 事件桥（FabricLifecycleBridge 等）
+        // 被 mcl 侧织入代码调用，一旦由 app 加载，它引用 net.fabricmc.* 时也由 app 解析，
+        // 而 net.fabricmc stub 的 <clinit> 会引用 net.minecraft.* → app 再从 classpath 自己
+        // defineClass 一份 MinecraftServer → LinkageError（loader constraint violation）。
+        // 识别特征：栈帧里出现 `ServerLifecycleEvents.<clinit>` → `FabricLifecycleBridge.fireServerStarting`
+        // 且报 "loader 'app' wants to load abstract class net.minecraft.server.MinecraftServer"。
+        // 例外 3（2026-10-31，MGScript）：io.mirage.mgscript.* 是脚本引擎与它的 MC 绑定层。
+        // 绑定层直接引用 net.minecraft.*（构造 Item/Block、订阅 tick 事件），一旦由 app 加载，
+        // 它引用的 MC 类会被 app 从启动 classpath 再 define 一份 → 与 MCL 版本冲突，
+        // 症状是 LinkageError: loader constraint violation，且栈帧指向 net.minecraft.*，
+        // 极难倒推。与前两个例外同因，增删此名单前先读这段。
+        if (name.startsWith("io.mirage.")
+                && !name.startsWith("io.mirage.neoforge.")
+                && !name.startsWith("io.mirage.fabric.")
+                && !name.startsWith("io.mirage.mgscript.")) {
             return ClassLoader.getSystemClassLoader().loadClass(name);
         }
         // java.*/javax.*/jdk.* 走 parent

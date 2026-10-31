@@ -77,6 +77,8 @@ public final class ModInitStage implements Stage {
 
             // 失败清单：id(摘要)，阶段末尾统一播报
             List<String> failures = new ArrayList<>();
+            // 脚本 host 句柄：P1 的 /mgs reload 要拿它重载（先存着，本阶段只负责加载）
+            List<Object> scriptHosts = new ArrayList<>();
 
             // 实例化每个 Mod 的入口类，按 entrypoints 反射调用 onInitialize()/onInitializeClient()
             // 进度区间 45% ~ 65%，按 mod 数量线性推进
@@ -101,6 +103,34 @@ public final class ModInitStage implements Stage {
                 // 端侧入口列表（仅 fabric mod 有）：物理客户端跑 entrypoints.client，
                 // 专用服务端跑 entrypoints.server（P1-7；Fabric 语义：二者互斥，main 两端都跑）
                 List<String> sideClasses = ModEntrypoints.sideClasses(mod, dist);
+
+                // ---- 脚本 mod（MGScript）：没有 Java 主类，交给 MirageScriptHost ----
+                // 反射进入而不是直接 import：ls 侧是 app classloader，一旦 import
+                // io.mirage.mgscript.mc.*，绑定层引用的 net.minecraft.* 会被 app 再定义一份，
+                // 与 MCL 版本冲突（LinkageError）。与 NeoLifecycle 同一套路。
+                if (mod.scriptRoot != null) {
+                    modIdx++;
+                    int modProgress = modTotal > 0 ? 45 + (int) (20.0 * modIdx / modTotal) : 50;
+                    MirageDebug.setStage("加载脚本 mod");
+                    MirageDebug.setCurrentMod(mod.manifest.id + " v" + mod.manifest.version);
+                    MirageDebug.setProgress(modProgress);
+                    MirageLog.MIRAGE.info("加载脚本 mod (" + modIdx + "/" + modTotal + "): "
+                            + mod.manifest.id + " → " + mod.scriptRoot.getFileName());
+                    try {
+                        Class<?> hostCls = Class.forName("io.mirage.mgscript.mc.MirageScriptHost", true, mcl);
+                        Object host = hostCls
+                                .getConstructor(String.class, java.nio.file.Path.class, ClassLoader.class)
+                                .newInstance(mod.manifest.id, mod.scriptRoot, mcl);
+                        hostCls.getMethod("load").invoke(host);
+                        scriptHosts.add(host);
+                        MirageDebug.setModCount(modIdx);
+                    } catch (Throwable t) {
+                        failures.add(describeFailure(mod, t));
+                        MirageLog.MIRAGE.error("加载脚本 mod " + mod.manifest.id
+                                + " 失败——该 mod 的功能将不可用，游戏继续启动", t);
+                    }
+                    continue;
+                }
 
                 if (mainClasses.isEmpty() && sideClasses.isEmpty()) {
                     // 主类定位失败且未被 S2 策略拦下（confirm+Y 放行）——记 WARN，不静默（原则 3）
@@ -238,6 +268,8 @@ public final class ModInitStage implements Stage {
             // ---- 注册表关窗：BlockState 修补 + 重新冻结（保序：mod 初始化之后）----
             window.patchBlockStates();
             window.refreeze();
+
+            ctx.properties().put("S6.scriptHosts", scriptHosts);
 
             // ---- 失败汇总：一次看清「哪些 mod 没起来、为什么」----
             if (!failures.isEmpty()) {

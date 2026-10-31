@@ -1,0 +1,24 @@
+# rubycraft —— MGScript 示例 mod（P0 验收用）
+#
+# 拷贝整个 rubycraft/ 目录到游戏的 mods/ 下即可，不需要 JDK、不需要 Gradle、不需要打 jar。
+# 改完脚本重启游戏生效（热重载 /mgs reload 在 P1）。
+
+mod "rubycraft" version "0.1.0"
+
+# ---- 声明一个物品（S6 统一 flush，注册时机由加载器保证）----
+item "ruby"
+    name "Ruby"
+    stack 64
+
+# ---- 声明一个方块（自动附带 BlockItem）----
+block "ruby_block"
+    hardness 3.0
+
+# ---- 加载期回调：游戏启动、mod 初始化时执行一次 ----
+on init
+    log.info("rubycraft 已加载，ruby 与 ruby_block 已注册")
+
+# ---- 周期回调：服务端每 20 tick（1 秒）执行一次 ----
+# P0 阶段 server 对象包装层未接（计划 P1），先用内置打印验证链路
+on tick(server) every 20
+    log.debug("rubycraft tick 心跳")

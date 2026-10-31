@@ -24,7 +24,14 @@ public class ModContainer {
     public final IrDescriptorParser.IrResult ir;
 
     /**
-     * 是否来自 NeoForge mod（neoforge.mods.toml + @Mod 检测分支）。
+     * 脚本 mod 的根目录（含 `scripts/*.mgs` 与描述符）。非脚本 mod 为 null。
+     *
+     * <p>目录形态是 MGScript 的「零工具链」入口：不需要 JDK、不需要 Gradle、不需要打 jar，
+     * 在 mods 下建一个文件夹写脚本即可。S6 见到本字段非 null 就走脚本分支，不再找 Java 主类。
+     */
+    public final Path scriptRoot;
+
+    /** 是否来自 NeoForge mod（neoforge.mods.toml + @Mod 检测分支）。
      * Launcher 据此允许 {@code MyMod(IEventBus)} 注入式构造回退。
      */
     public boolean fromNeoForge;
@@ -46,20 +53,28 @@ public class ModContainer {
     }
 
     public ModContainer(ModManifest manifest, Path jarFile) {
-        this(manifest, jarFile, null, null);
+        this(manifest, jarFile, null, null, null);
     }
 
     public ModContainer(ModManifest manifest, Path jarFile, Map<String, List<String>> fabricEntrypoints) {
-        this(manifest, jarFile, fabricEntrypoints, null);
+        this(manifest, jarFile, fabricEntrypoints, null, null);
     }
 
     public ModContainer(ModManifest manifest, Path jarFile,
                         Map<String, List<String>> fabricEntrypoints,
                         IrDescriptorParser.IrResult ir) {
+        this(manifest, jarFile, fabricEntrypoints, ir, null);
+    }
+
+    public ModContainer(ModManifest manifest, Path jarFile,
+                        Map<String, List<String>> fabricEntrypoints,
+                        IrDescriptorParser.IrResult ir,
+                        Path scriptRoot) {
         this.manifest = manifest;
         this.jarFile = jarFile;
         this.fabricEntrypoints = fabricEntrypoints;
         this.ir = ir;
+        this.scriptRoot = scriptRoot;
     }
 
     @Override
