@@ -1,5 +1,6 @@
 package io.mirage.ls.stage;
 
+import io.mirage.api.error.MirageErrors;
 import io.mirage.api.log.MirageLog;
 
 import io.mirage.loader.ModContainer;
@@ -98,7 +99,7 @@ public final class TransformStage implements Stage {
             } catch (Exception e) {
                 // JDK25 内部 API 变更时此处失败（diag 日志里的 NoSuchFieldException: ucp）——
                 // 不 FATAL：资源查找还有 mcl.getResources 兜底路径。
-                MirageLog.MIRAGE.warn("mod jar 加入系统 classpath 失败（该 mod 的类可能无法链接）", e);
+                MirageErrors.ignore("mod jar 加入系统 classpath 失败（JDK25 内部 API 变更所致；已走 mcl.getResources 兜底路径，不阻断启动）", e);
             }
 
             ctx.properties().put("S3.classLoader", mcl);

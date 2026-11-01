@@ -5,6 +5,7 @@ import io.mirage.api.event.ModConstructEvent;
 import io.mirage.api.event.ModInitEvent;
 import io.mirage.api.event.ModPostInitEvent;
 import io.mirage.api.event.ModPreInitEvent;
+import io.mirage.api.error.MirageErrors;
 import io.mirage.api.log.MirageLog;
 import io.mirage.api.registry.DeferredRegister;
 import io.mirage.api.version.VersionMasks;
@@ -126,7 +127,7 @@ public final class ModInitStage implements Stage {
                         MirageDebug.setModCount(modIdx);
                     } catch (Throwable t) {
                         failures.add(describeFailure(mod, t));
-                        MirageLog.MIRAGE.error("加载脚本 mod " + mod.manifest.id
+                        MirageErrors.error("加载脚本 mod " + mod.manifest.id
                                 + " 失败——该 mod 的功能将不可用，游戏继续启动", t);
                     }
                     continue;
@@ -170,7 +171,7 @@ public final class ModInitStage implements Stage {
                     } catch (Throwable t) {
                         PassiveRecorder.markFailure(clsName);
                         failures.add(describeFailure(mod, t));
-                        MirageLog.MIRAGE.error("初始化 mod " + mod.manifest.id + " (" + clsName
+                        MirageErrors.error("初始化 mod " + mod.manifest.id + " (" + clsName
                                 + ") 失败——该 mod 的功能将不可用，游戏继续启动", t);
                     }
                 }
@@ -197,7 +198,7 @@ public final class ModInitStage implements Stage {
                         } catch (Throwable t) {
                             PassiveRecorder.markFailure(clsName);
                             failures.add(describeFailure(mod, t));
-                            MirageLog.MIRAGE.error("调用 server entrypoint " + clsName + " 失败", t);
+                            MirageErrors.error("调用 server entrypoint " + clsName + " 失败——此 entrypoint 本次未执行，其他 mod 不受影响", t);
                         }
                         continue;
                     }
@@ -219,7 +220,7 @@ public final class ModInitStage implements Stage {
                     } catch (Throwable t) {
                         PassiveRecorder.markFailure(clsName);
                         failures.add(describeFailure(mod, t));
-                        MirageLog.MIRAGE.error("调用 client entrypoint " + clsName + " 失败", t);
+                        MirageErrors.error("调用 client entrypoint " + clsName + " 失败——此 entrypoint 本次未执行，其他 mod 不受影响", t);
                     }
                 }
                 // MSR P2：收窗口 → 与磁盘上的旧录制做二启 diff → 合并入库（不完整的丢弃）

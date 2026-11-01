@@ -17,6 +17,7 @@
  */
 package io.mirage.fabric.runtime;
 
+import io.mirage.api.error.MirageErrors;
 import io.mirage.api.log.MirageLog;
 
 import java.util.Collections;
@@ -289,8 +290,7 @@ public final class FabricNetworkingBridge {
 		try {
 			((ServerPlayNetworking.PlayPayloadHandler<CustomPacketPayload>) handler).receive(payload, new ServerContext(listener));
 		} catch (Throwable t) {
-			MirageLog.MIRAGE.warn("Fabric server payload handler 抛出异常", t);
-			t.printStackTrace();
+			MirageErrors.warn("Fabric server payload handler 抛出异常——该 payload 本次未被处理，其他 payload 不受影响", t);
 		}
 	}
 
@@ -299,8 +299,7 @@ public final class FabricNetworkingBridge {
 		try {
 			((ClientPlayNetworking.PlayPayloadHandler<CustomPacketPayload>) handler).receive(payload, new ClientContext(listener));
 		} catch (Throwable t) {
-			MirageLog.MIRAGE.warn("Fabric client payload handler 抛出异常", t);
-			t.printStackTrace();
+			MirageErrors.warn("Fabric client payload handler 抛出异常——该 payload 本次未被处理，其他 payload 不受影响", t);
 		}
 	}
 

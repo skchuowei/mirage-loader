@@ -1,5 +1,6 @@
 package io.mirage.mixin;
 
+import io.mirage.api.error.MirageErrors;
 import io.mirage.api.log.MirageLog;
 
 import org.spongepowered.asm.launch.MixinBootstrap;
@@ -88,7 +89,7 @@ public final class MirageMixinBootstrap {
             // 现在这类失败直接升级为致命错误：让启动崩，并明确指出
             // 「目标类 + 目标方法 + mixin 名」，宁可响亮地死也不要静默地坏。
             if (isFatalMixinFailure(th)) {
-                MirageLog.MIXIN.fatal("[FATAL] 关键织入失败，目标类: " + name
+                MirageErrors.fatal("关键织入失败，目标类: " + name
                         + " —— 注入点失效会让功能静默消失，这里选择让启动失败而不是降级为原字节码"
                         + "\n" + describeChain(th), th);
                 throw new MixinApplyFatalException("Mixin apply failed for target class: " + name, th);
