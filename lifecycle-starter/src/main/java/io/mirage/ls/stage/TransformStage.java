@@ -60,6 +60,15 @@ public final class TransformStage implements Stage {
                 MirageLog.MIRAGE.debug("添加 mod jar: " + mod.jarFile.getFileName());
             }
 
+            // ---- 可选模块懒加载（G9）----
+            // 时机：mcl 已建、mod jar 已全部加入 —— 此时加模块 jar 不会与 mod jar 抢优先级，
+            // 且 mod 类尚未加载（S6 才实例化），模块的类可以先于 mod 到位。
+            // 模块 jar 默认在 <gameDir>/modules/，不进 fat jar、不参与启动期扫描；
+            // 只有被某个 mod 在 mirage.mod.json 里声明 "requires" 才会被加进来。
+            io.mirage.loader.module.ModuleRegistry.Result moduleResult =
+                    io.mirage.loader.module.ModuleRegistry.load(ctx.gameDir(), mcl, mods);
+            ctx.properties().put("S3.modules", moduleResult);
+
             // ---- 初始化 SpongePowered Mixin 管线 ----
             List<String> mixinConfigs = new ArrayList<>();
             for (ModContainer mod : mods) {

@@ -22,6 +22,21 @@ public class ModManifest {
     /** 可选：依赖表 modId -> 版本范围（M2 只做存在性校验） */
     public Map<String, String> depends;
 
+    /**
+     * 可选：本 mod 需要的**可选模块** id 列表（G9 模块懒加载）。
+     *
+     * <p>与 {@link #depends} 语义区分：
+     * <ul>
+     *   <li>{@code depends} = mod 依赖（modId → 版本范围），缺了 mod 起不来；</li>
+     *   <li>{@code requires} = 模块依赖（模块 id 列表），缺了功能降级但游戏继续。</li>
+     * </ul>
+     *
+     * <p>模块的 jar 默认在 {@code <gameDir>/modules/}，不进 fat jar、不参与启动期扫描；
+     * 只有被某个 mod 声明了才会被动态加入类加载器。详见
+     * {@code io.mirage.loader.module.ModuleRegistry}。
+     */
+    public java.util.List<String> requires;
+
     /** 可选："client" / "server" / "both"，默认 both */
     public String side = "both";
 

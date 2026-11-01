@@ -1,0 +1,7 @@
+{
+  "id": "mirage-kotlin",
+  "version": "0.1.0",
+  "provides": ["dev.mirage.kotlin"],
+  "requires": [],
+  "entrypoint": "dev.mirage.kotlin.KotlinModule"
+}

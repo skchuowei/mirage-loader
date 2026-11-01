@@ -1,0 +1,7 @@
+{
+  "id": "mirage-config",
+  "version": "0.1.0",
+  "provides": ["dev.mirage.config"],
+  "requires": [],
+  "entrypoint": "dev.mirage.config.ConfigModule"
+}

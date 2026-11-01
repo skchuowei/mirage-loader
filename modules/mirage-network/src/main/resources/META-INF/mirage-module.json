@@ -1,0 +1,7 @@
+{
+  "id": "mirage-network",
+  "version": "0.1.0",
+  "provides": ["dev.mirage.network"],
+  "requires": [],
+  "entrypoint": "dev.mirage.network.NetworkModule"
+}
