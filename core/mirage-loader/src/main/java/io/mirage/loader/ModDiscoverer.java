@@ -170,6 +170,7 @@ public class ModDiscoverer {
                             eps.put("client", fm.entrypointClasses("client"));
                             eps.put("server", List.of());
                             ModContainer c = new ModContainer(m, jar, eps);
+                            c.fabricMixinConfigs = fm.mixinConfigPaths();
                             byId.put(m.id, c);
                             result.add(c);
                             MirageLog.LOADER.debug("  + 发现 (fabric) " + c

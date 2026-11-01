@@ -33,6 +33,15 @@ public class FabricModManifest {
      */
     public Map<String, List<JsonElement>> entrypoints;
 
+    /**
+     * 声明的 mixin config 资源路径列表（fabric.mod.json 的 "mixins" 字段）。
+     * 元素通常是字符串（相对 jar 根的路径，如 "modid.mixins.json"，可含子目录）；
+     * 也可能罕见的对象形态（{"container": "...", "file": "..."}），本实现不支持、跳过并告警。
+     * 必须用 JsonElement 防御：Gson 直读 List&lt;String&gt; 遇对象元素会抛 JsonSyntaxException，
+     * 导致整个 manifest 解析失败、mod 被跳过。
+     */
+    public List<JsonElement> mixins;
+
     public boolean isValid() {
         if (id == null || id.isEmpty()) return false;
         if (version == null || version.isEmpty()) return false;
@@ -55,6 +64,26 @@ public class FabricModManifest {
             } else if (el.isJsonObject()) {
                 JsonObject o = el.getAsJsonObject();
                 if (o.has("value")) out.add(o.get("value").getAsString());
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 取出声明的 mixin config 路径列表（仅字符串形态）。
+     * 对象形态（{"container","file"}）暂不支持：跳过并 WARN 指名，不让整个 mod 失败。
+     */
+    public List<String> mixinConfigPaths() {
+        List<String> out = new ArrayList<>();
+        if (mixins == null) return out;
+        for (JsonElement el : mixins) {
+            if (el == null || el.isJsonNull()) continue;
+            if (el.isJsonPrimitive()) {
+                String s = el.getAsString();
+                if (s != null && !s.isEmpty()) out.add(s);
+            } else if (el.isJsonObject()) {
+                io.mirage.api.log.MirageLog.LOADER.warn("! mod '" + id + "' 的 fabric.mod.json mixins 含对象形态声明（"
+                        + el + "），暂不支持，已跳过");
             }
         }
         return out;

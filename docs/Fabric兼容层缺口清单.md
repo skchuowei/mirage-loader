@@ -138,17 +138,25 @@ client 子集其余回调（`ClientEntityEvents` 等）仍缺口，归 P0-2 一�
 
 `CommandRegistrationCallback` 未实现。
 
-#### 13. mod 自带 mixin config 不加载（2026-11-01 新列，建议 P1）
+#### 13. ~~mod 自带 mixin config 不加载~~（2026-11-01 新列；**同日修正：根因与描述均错，见下**，已修）
 
-**现状**：`FabricModManifest` 不解析 fabric.mod.json 的 `mixins` 字段；`MirageMixinBootstrap` 只加载自家
-`mirage.mixins.json` 单一配置。mod jar 内的 `*.mixins.json` 完全不会被注册进 mixin 环境。
+**~~现状~~【已过时·2026-11-01 二次修订】** ~~`FabricModManifest` 不解析 fabric.mod.json 的 `mixins` 字段；`MirageMixinBootstrap` 只加载自家
+`mirage.mixins.json` 单一配置。mod jar 内的 `*.mixins.json` 完全不会被注册进 mixin 环境。~~
 
-**问题**：真实 Fabric mod 几乎必带 mixin——不会被织入，mod 引用 mixin 派生类型（duck interface、
-@Shadow 暴露成员）时 `NoClassDefFoundError`/`NoSuchMethodError`。这是"注册 lifecycle 的极简 mod 能跑、
-真实 mod 链接期就炸"的主要结构性缺口之一。
+**修正后的真相（字节码取证）**：TransformStage 从 LS 拆分起就在扫描并注册 mod jar 根目录的 `*.mixin.json`
+（`FabricModManifest` 确实不解析 `mixins` 字段，但收集走的是 jar 盲扫，不走声明字段）。真正的根因是
+**注册名被去掉了 `.json` 后缀**（`name.substring(0, name.length() - ".mixin.json".length())`），而
+Sponge Mixin 0.8.7 的 `Mixins.addConfiguration → Config.create` 对传入名**原样**调 `getResourceAsStream`，
+查不到抛 `IllegalArgumentException` 并被静默吞掉（"Error encountered reading mixin config ..."，走
+Mixin 自家 logger，不进 Mirage 日志）——**mod mixin config 从初始提交起就一个都没解析成功过**；
+`MirageMixinService` 里剥 `compatibilityLevel`/`mixinextras` 的后处理分支也因此从未触发。
 
-**修复方向**：ModDiscoverer 解析 `mixins` 字段存入 ModContainer → S3/S4 把 mod jar 内 mixin config
-注册进 mixin 环境；注意双注入路径互斥（AGENTS 技术注意事项第 3/9 节）。
+**修复（2026-11-01，计划 `docs/plans/2026-11-01_mod-mixin-config.md`）**：
+- 收集逻辑抽纯逻辑类 `core/mirage-loader/.../mixin/ModMixinConfigs`（声明优先 + 根目录盲扫兜底 + 统一 `.json` 后缀 + 去重 + 缺失 WARN）；
+- `TransformStage` 改走收集器，注册名一律完整资源路径；
+- `FabricModManifest` 新增防御式 `mixins` 字段（`List<JsonElement>`）+ `mixinConfigPaths()`，`ModContainer.fabricMixinConfigs` 透传——声明字段从此成为权威来源，子目录 config 可用；
+- 回归 `scripts/verify_mod_mixin_config.ps1`（15 断言 + 源码守卫 8 项 + 4 种变异检验全红）。
+**实机验证待用户双击 bat**：`logs/mirage-launch.log` 应出现 `后处理 mixin config: <mod的config>.json`。
 
 #### 14. depends 依赖检查未做（2026-11-01 新列）
 

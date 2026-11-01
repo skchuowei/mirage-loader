@@ -37,6 +37,12 @@ public class ModContainer {
     public boolean fromNeoForge;
 
     /**
+     * fabric.mod.json "mixins" 字段声明的 mixin config 路径（原样，可含子目录；可能不带 .json 后缀）。
+     * 非 fabric 来源为 null。S3 收集 mixin config 时作为权威来源，根目录盲扫只做兜底。
+     */
+    public List<String> fabricMixinConfigs;
+
+    /**
      * NeoForge 识别结果（id/version/mainClass/版本区间）。非 NeoForge 来源为 null。
      * MSR P2：S6 的被动捕获要把录制结果写回 `.mid-cache`，而 {@link MidCache#storePassive}
      * 需要这份元数据（缓存文件按 detected.id 定位、detected 本身也要保留）。

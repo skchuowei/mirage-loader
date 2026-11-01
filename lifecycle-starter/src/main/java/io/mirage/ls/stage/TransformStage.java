@@ -39,6 +39,7 @@ public final class TransformStage implements Stage {
     @Override
     public StageOutcome execute(LifecycleContext ctx) {
         return StageSupport.guard(() -> {
+            MirageDebug.setPhase(2);
             List<ModContainer> mods = StageSupport.get(ctx, "S1.mods");
 
             MirageDebug.setStage("创建类加载器");
@@ -70,23 +71,42 @@ public final class TransformStage implements Stage {
             ctx.properties().put("S3.modules", moduleResult);
 
             // ---- 初始化 SpongePowered Mixin 管线 ----
-            List<String> mixinConfigs = new ArrayList<>();
+            // 收集策略见 ModMixinConfigs（纯逻辑类，离线断言在 scripts/verify_mod_mixin_config.ps1）：
+            // fabric.mod.json "mixins" 声明（可含子目录）优先 + 根目录 *.mixin.json 盲扫兜底；
+            // 注册名一律完整资源路径（带 .json）——Mixin 0.8.7 对传入名原样查资源、
+            // 查不到静默吞（Error encountered reading mixin config），缺后缀 = config 永远不生效。
+            java.util.Map<String, io.mirage.loader.mixin.ModMixinConfigs.Result> perMod =
+                    new java.util.LinkedHashMap<>();
             for (ModContainer mod : mods) {
+                List<String> declared = mod.fabricMixinConfigs != null ? mod.fabricMixinConfigs : List.of();
+                java.util.Set<String> rootEntries = new java.util.LinkedHashSet<>();
+                java.util.Set<String> allEntries = new java.util.LinkedHashSet<>();
                 try (java.util.zip.ZipFile zf = new java.util.zip.ZipFile(mod.jarFile.toFile())) {
                     java.util.Enumeration<? extends java.util.zip.ZipEntry> zEntries = zf.entries();
                     while (zEntries.hasMoreElements()) {
-                        java.util.zip.ZipEntry e = zEntries.nextElement();
-                        String name = e.getName();
-                        if (name.endsWith(".mixin.json") && !name.contains("/")) {
-                            String configName = name.substring(0, name.length() - ".mixin.json".length());
-                            mixinConfigs.add(configName);
-                            MirageLog.MIXIN.debug("发现 mixin config: " + configName + " (from " + mod.jarFile.getFileName() + ")");
+                        String name = zEntries.nextElement().getName();
+                        allEntries.add(name);
+                        if (!name.contains("/") && name.endsWith(".mixin.json")) {
+                            rootEntries.add(name);
                         }
                     }
                 } catch (Exception e) {
-                    MirageLog.MIXIN.warn("扫描 mod jar 失败（该 mod 的 mixin 不会生效）", e);
+                    MirageLog.MIXIN.warn("扫描 mod jar 失败（" + mod.jarFile.getFileName() + " 的 mixin 不会生效）", e);
+                    continue;
+                }
+                perMod.put(mod.manifest.id, io.mirage.loader.mixin.ModMixinConfigs.collectOne(
+                        mod.manifest.id, declared, rootEntries, allEntries));
+            }
+            for (java.util.Map.Entry<String, io.mirage.loader.mixin.ModMixinConfigs.Result> e : perMod.entrySet()) {
+                if (!e.getValue().missing.isEmpty()) {
+                    MirageLog.MIXIN.warn("mod '" + e.getKey() + "' 声明的 mixin config 在 jar 中不存在: "
+                            + e.getValue().missing);
+                }
+                for (String cfg : e.getValue().configs) {
+                    MirageLog.MIXIN.debug("发现 mixin config: " + cfg);
                 }
             }
+            List<String> mixinConfigs = io.mirage.loader.mixin.ModMixinConfigs.collectAll(perMod);
             // 加上 loader 自身的 mixin config
             mixinConfigs.add("mirage.mixins.json");
             io.mirage.mixin.MirageMixinBootstrap.init(mcl, mixinConfigs);

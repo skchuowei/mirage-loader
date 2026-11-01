@@ -125,7 +125,7 @@ io.mirage.fabric.runtime.*Bridge（3 个桥）← core/mirage-mixin 的 9 条 Fa
 
 ### 5.3 结构性缺口（推动 P0/P1）
 
-11. **mod 自带 mixin config 不加载（2026-11-01 新列，建议 P1）**：`FabricModManifest` 不解析 fabric.mod.json 的 `mixins` 字段；`MirageMixinBootstrap` 只加载自家 `mirage.mixins.json` 单一配置。真实 Fabric mod 几乎必带 mixin——其 mixin 不会被织入，mod 引用 mixin 派生类型（duck interface / @Shadow 暴露成员）时 `NoClassDefFoundError`/`NoSuchMethodError`。修法方向：ModDiscoverer 解析 `mixins` 字段存入 ModContainer → S3/S4 把 mod jar 内 `*.mixins.json` 注册进 mixin 环境（注意与 §5.4 双注入路径冲突检查）。
+11. ~~**mod 自带 mixin config 不加载（2026-11-01 新列，建议 P1）**~~ **【已过时·2026-11-01 二次修订】** 上半句结论（`FabricModManifest` 不解析 `mixins` 字段）属实，但"mixin 引擎只加载自家配置"**错误**——`TransformStage` 一直在扫描并注册 mod jar 根目录的 `*.mixin.json`，真根因是**注册名被去掉 `.json` 后缀**，Mixin 0.8.7 对传入名原样查资源、查不到静默吞（字节码取证见缺口清单 P1-13 修正记录）——mod mixin config 实际从未生效。**已修（同日）**：收集逻辑抽 `ModMixinConfigs` 纯逻辑类、注册名统一完整资源路径、声明字段消费、子目录支持；回归 `scripts/verify_mod_mixin_config.ps1`。改造时仍须注意双注入路径互斥（§5.4-17）。
 12. **depends 依赖检查未做（2026-11-01 新列）**：`FabricModManifest.toMirageManifest()` 把 `depends` 置 null 丢弃——依赖缺失/版本不满足的 mod 照样加载，炸在更远的调用栈上。建议与 G9 模块 `requires` 的降级策略对齐（缺失 WARN 跳过）。
 13. **fabric-api-events 其余 20+ 回调类（P0-2）**：AttackEntityCallback / UseBlockCallback / ServerTickEvents / ServerPlayerEvents / PlayerTickEvents / EntitySpawnEvent / LivingEntityEvents 等——事件类不存在 → mod 链接期 `NoClassDefFoundError`。
 14. **fabric-api-registry 桥接（P0-3）**：`Registry.register` 静态注册 / `RegistryEntryAddedCallback` / `FabricRegistryBuilder` 未转接到 MG Registry。
