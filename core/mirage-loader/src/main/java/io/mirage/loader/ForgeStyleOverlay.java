@@ -110,14 +110,12 @@ public final class ForgeStyleOverlay {
     private static volatile boolean textDrawnLogged;
 
     /** 不定进度动画的帧计数。 */
-    private static int frame;
     private static final AtomicInteger DIAG = new AtomicInteger();
 
     // ---- 反射字段缓存：上一版每帧 getDeclaredField 三次，纯属浪费 ----
     private static volatile Field fadeOutStartField;
     private static volatile Field fadeInField;
     private static volatile Field fadeInStartField;
-    private static volatile Field currentProgressField;
 
     // ---- 动态文本快照（250 ms 一采） ----
     private static volatile String perfLine = "";
@@ -155,6 +153,18 @@ public final class ForgeStyleOverlay {
                     // g = [w, h, (x,y,w,h)×n] → 存 [advance, w, h, (x,y,w,h)×n]
                     int[] store = new int[3 + (g.length - 2)];
                     store[0] = advance;
+                    store[1] = g[0];
+                    store[2] = g[1];
+                    System.arraycopy(g, 2, store, 3, g.length - 2);
+                    GLYPH_CACHE.put(px + "\u0000" + ch, store);
+                }
+                // 汉字：用 CJK 字体（Consolas 等宽字体不含汉字，否则光栅化成豆腐块）
+                for (int i = 0; i < MirageDebug.LOADING_CJK_SOURCE.length(); i++) {
+                    char ch = MirageDebug.LOADING_CJK_SOURCE.charAt(i);
+                    if (ch <= 126) continue;
+                    int[] g = MirageDebug.rasterizePixelText(String.valueOf(ch), cjkFont(px));
+                    int[] store = new int[3 + (g.length - 2)];
+                    store[0] = g[0]; // CJK 用字形实际宽作步进
                     store[1] = g[0];
                     store[2] = g[1];
                     System.arraycopy(g, 2, store, 3, g.length - 2);
@@ -212,7 +222,10 @@ public final class ForgeStyleOverlay {
                 pack(alpha, ForgeStyleLayout.FORGE_RED)));
         step("内存条", () -> drawMemoryBar(gge, fill, sx, sy, alpha));
         step("内存文字", () -> drawMemoryText(gge, fill, sx, sy, alpha));
-        step("进度条", () -> drawProgressBars(gge, fill, sx, sy, overlay, alpha));
+        step("总进度条", () -> drawTotalProgress(gge, fill, sx, sy, alpha));
+        step("阶段摘要", () -> drawStageSummary(gge, fill, sx, sy, alpha));
+        step("阶段步骤条", () -> drawStageStepper(gge, fill, sx, sy, alpha));
+        step("日志面板", () -> drawLogPanel(gge, fill, sx, sy, alpha));
         step("版本号", () -> drawVersion(gge, fill, sx, sy, alpha));
     }
 
@@ -253,55 +266,139 @@ public final class ForgeStyleOverlay {
                 pack(alpha, ForgeStyleLayout.WHITE));
     }
 
-    // ---- 两条进度条 ----
+    // ---- 总进度条（内存条下方，显示整体加载百分比） ----
 
-    private static void drawProgressBars(Object gge, Method fill, float sx, float sy,
-                                         Object overlay, int alpha) {
-        String[] labels = {"Loading mods", "Config loading"};
-        float progress = configProgress(overlay);
-        frame++;
+    private static void drawTotalProgress(Object gge, Method fill, float sx, float sy, int alpha) {
+        float p = clamp01(MirageDebug.progress / 100f);
+        int top = ForgeStyleLayout.TOTAL_BAR_TOP;
+        // 0%→红，100%→绿（与内存条反向：进度高=好）
+        int r = (int) (255 * (1f - p));
+        int g = (int) (255 * p);
+        int barColour = (r << 16) | (g << 8) | 0x40;
 
-        for (int i = 0; i < labels.length; i++) {
-            // 与早期窗口一致：第二条整体减半透明
-            int barAlpha = (0xFF >> i) * alpha / 255;
-            int colour = pack(barAlpha, ForgeStyleLayout.WHITE);
-
-            float p0;
-            float p1;
-            if (i == 0) {
-                p0 = clamp01((frame % 100 - 2) / 100f);
-                p1 = clamp01((frame % 100 + 2) / 100f);
-            } else {
-                p0 = 0f;
-                p1 = progress;
-            }
-
-            int top = ForgeStyleLayout.barTop(i);
-
-            // 外框
-            MirageDebug.fillRect(gge, fill,
-                    gx(ForgeStyleLayout.barLeft(), sx), gy(top, sy),
-                    gx(ForgeStyleLayout.barOuterRight(), sx), gy(top + ForgeStyleLayout.BAR_HEIGHT, sy),
-                    colour);
-            // 内衬
-            MirageDebug.fillRect(gge, fill,
-                    gx(ForgeStyleLayout.barInnerLeft(), sx), gy(top + ForgeStyleLayout.INNER_INSET, sy),
-                    gx(ForgeStyleLayout.barInnerRight(), sx),
-                    gy(top + ForgeStyleLayout.BAR_HEIGHT - ForgeStyleLayout.INNER_INSET, sy),
-                    pack(barAlpha, ForgeStyleLayout.FORGE_RED));
-            // 填充：起点固定贴内衬左边缘，宽度 = (p1-p0) × BAR_WIDTH
-            int fx0 = gx(ForgeStyleLayout.barFillLeft() + p0 * ForgeStyleLayout.BAR_WIDTH, sx);
-            int fx1 = gx(ForgeStyleLayout.barFillLeft() + p1 * ForgeStyleLayout.BAR_WIDTH, sx);
-            if (fx1 > fx0) {
-                MirageDebug.fillRect(gge, fill, fx0,
-                        gy(top + ForgeStyleLayout.FILL_INSET, sy),
-                        fx1, gy(top + ForgeStyleLayout.BAR_HEIGHT - ForgeStyleLayout.FILL_INSET, sy),
-                        colour);
-            }
-
-            drawText(gge, fill, labels[i], gx(ForgeStyleLayout.barLeft(), sx),
-                    gy(ForgeStyleLayout.labelTextY(i), sy), sx, colour);
+        // 外框（白）
+        MirageDebug.fillRect(gge, fill,
+                gx(ForgeStyleLayout.barLeft(), sx), gy(top, sy),
+                gx(ForgeStyleLayout.barOuterRight(), sx), gy(top + ForgeStyleLayout.TOTAL_BAR_HEIGHT, sy),
+                pack(alpha, ForgeStyleLayout.WHITE));
+        // 内衬（红）
+        MirageDebug.fillRect(gge, fill,
+                gx(ForgeStyleLayout.barInnerLeft(), sx), gy(top + ForgeStyleLayout.INNER_INSET, sy),
+                gx(ForgeStyleLayout.barInnerRight(), sx),
+                gy(top + ForgeStyleLayout.TOTAL_BAR_HEIGHT - ForgeStyleLayout.INNER_INSET, sy),
+                pack(alpha, ForgeStyleLayout.FORGE_RED));
+        // 填充
+        int fx0 = gx(ForgeStyleLayout.barFillLeft(), sx);
+        int fx1 = gx(ForgeStyleLayout.barFillRight(p), sx);
+        if (fx1 > fx0) {
+            MirageDebug.fillRect(gge, fill, fx0, gy(top + ForgeStyleLayout.FILL_INSET, sy),
+                    fx1, gy(top + ForgeStyleLayout.TOTAL_BAR_HEIGHT - ForgeStyleLayout.FILL_INSET, sy),
+                    pack(alpha, barColour));
         }
+        // 标签
+        String label = "总进度 " + MirageDebug.progress + "%";
+        drawText(gge, fill, label, gx(ForgeStyleLayout.barLeft(), sx),
+                gy(ForgeStyleLayout.totalTextY(), sy), sx, pack(alpha, ForgeStyleLayout.WHITE));
+    }
+
+    // ---- 当前阶段摘要（总进度条下方，概括当前底层子任务） ----
+
+    private static void drawStageSummary(Object gge, Method fill, float sx, float sy, int alpha) {
+        drawText(gge, fill, MirageDebug.stageSummary(),
+                gx(ForgeStyleLayout.barLeft(), sx),
+                gy(ForgeStyleLayout.stageSummaryY(), sy), sx,
+                pack(alpha, ForgeStyleLayout.WHITE));
+    }
+
+    // ---- S1–S7 步骤条（中部，已完成打勾/进行中高亮/待处理灰显） ----
+
+    private static void drawStageStepper(Object gge, Method fill, float sx, float sy, int alpha) {
+        int[] states = MirageDebug.phaseStates();
+        int listLeft = ForgeStyleLayout.barLeft();
+        int sqPx = GUI_TEXT_PX; // 状态方块与文字等高，保证对齐
+        for (int k = 0; k < states.length; k++) {
+            int sqX = gx(listLeft, sx);
+            int sqY = gy(ForgeStyleLayout.stageRowTextY(k), sy);
+            int sqColor;
+            int textColor;
+            switch (states[k]) {
+                case 2: // 已完成：绿底
+                    sqColor = pack(alpha, 0x55FF55);
+                    textColor = pack(alpha, 0xCFCFCF);
+                    break;
+                case 1: // 进行中：黄底高亮
+                    sqColor = pack(alpha, 0xFFFF55);
+                    textColor = pack(alpha, 0xFFFFFF);
+                    break;
+                default: // 待处理：暗灰
+                    sqColor = pack(alpha, 0x555555);
+                    textColor = pack(alpha, 0x888888);
+                    break;
+            }
+            // 状态方块
+            MirageDebug.fillRect(gge, fill, sqX, sqY, sqX + sqPx, sqY + sqPx, sqColor);
+            // 阶段名（S1 发现Mod ...）
+            String label = "S" + (k + 1) + " " + MirageDebug.PHASE_NAMES[k];
+            int tx = sqX + sqPx + Math.max(4, Math.round(6 * sx));
+            drawText(gge, fill, label, tx, sqY, sx, textColor);
+        }
+    }
+
+    // ---- 底部滚动日志面板（占屏幕约 1/3，从下到上滚动，节选真实加载日志） ----
+
+    private static void drawLogPanel(Object gge, Method fill, float sx, float sy, int alpha) {
+        int gwPx = Math.round(ForgeStyleLayout.DESIGN_WIDTH * sx);
+        int ghPx = Math.round(ForgeStyleLayout.DESIGN_HEIGHT * sy);
+        int margin = Math.round(8 * sx);
+        int panelTop = gy(ForgeStyleLayout.logPanelTop(), sy);
+
+        // 面板背景（深底，压住红底，保证日志可读）
+        MirageDebug.fillRect(gge, fill, margin, panelTop, gwPx - margin, ghPx,
+                pack(alpha, 0x141414));
+
+        // 面板标题
+        drawText(gge, fill, "日志（实时）", margin + Math.round(4 * sx),
+                panelTop + Math.round(4 * sy), sx, pack(alpha, 0xAAAAAA));
+
+        // 可见行数（标题下方起，到底边止）
+        int lineH = GUI_TEXT_PX + 4;
+        int headerH = GUI_TEXT_PX + 8;
+        int avail = (ghPx - panelTop) - headerH - 4;
+        int maxLines = Math.max(1, avail / lineH);
+
+        String[] lines = MirageDebug.loadingLogLines();
+        int start = Math.max(0, lines.length - maxLines);
+        int y = ghPx - margin - lineH; // 最底行（最新）的顶部
+        int maxTextW = gwPx - 2 * margin - Math.round(8 * sx);
+        for (int k = lines.length - 1; k >= start; k--) {
+            String raw = lines[k];
+            drawText(gge, fill, truncate(raw, maxTextW, sx), margin + Math.round(4 * sx), y, sx,
+                    logPanelColor(raw, alpha));
+            y -= lineH;
+        }
+    }
+
+    /** 日志面板：按行内容着色（错误红 / 警告黄 / 其它灰）。 */
+    private static int logPanelColor(String line, int alpha) {
+        if (line.contains("ERROR") || line.contains("Exception")
+                || line.contains("失败") || line.contains("错误")) {
+            return pack(alpha, 0xFF7777);
+        }
+        if (line.contains("WARN") || line.contains("警告")) {
+            return pack(alpha, 0xFFFF77);
+        }
+        return pack(alpha, 0xBBBBBB);
+    }
+
+    /** 超宽日志截断，末尾补 "..."（ASCII，无需额外字形）。 */
+    private static String truncate(String s, int maxW, float sx) {
+        if (s == null) return "";
+        if (textWidth(s, sx) <= maxW) return s;
+        String t = s;
+        while (t.length() > 1 && textWidth(t + "...", sx) > maxW) {
+            t = t.substring(0, t.length() - 1);
+        }
+        return t + "...";
     }
 
     // ---- 右下角版本号 ----
@@ -312,7 +409,7 @@ public final class ForgeStyleOverlay {
         int w = textWidth(label, sx);
         int x = Math.round(ForgeStyleLayout.DESIGN_WIDTH * sx) - w
                 - Math.round(ForgeStyleLayout.VERSION_MARGIN * sx);
-        drawText(gge, fill, label, x, gy(ForgeStyleLayout.versionTextY(), sy), sx,
+        drawText(gge, fill, label, x, gy(ForgeStyleLayout.versionTopRightY(), sy), sx,
                 pack(alpha, ForgeStyleLayout.WHITE));
     }
 
@@ -348,6 +445,60 @@ public final class ForgeStyleOverlay {
             baseFont = base;
         }
         return base.getSize() == px ? base : base.deriveFont((float) px);
+    }
+
+    /** CJK 字体（独立于等宽 ASCII 字体）：Consolas/DejaVu 等不含汉字，必须用系统中文字体光栅化。 */
+    private static volatile Font cjkBaseFont;
+
+    private static Font cjkFont(int px) {
+        Font base = cjkBaseFont;
+        if (base == null) {
+            base = pickCjkFont(px);
+            cjkBaseFont = base;
+        }
+        return base.getSize() == px ? base : base.deriveFont((float) px);
+    }
+
+    /** 取中文字体：优先系统微软雅黑，否则回退到默认（可能无汉字字形，汉字会变空白）。 */
+    private static Font pickCjkFont(int px) {
+        String[] cands = {"Microsoft YaHei", "SimSun", "SimHei", "PingFang SC",
+                "Noto Sans CJK SC", "Source Han Sans SC", "SansSerif"};
+        try {
+            Set<String> available = new HashSet<>();
+            for (String family : GraphicsEnvironment.getLocalGraphicsEnvironment()
+                    .getAvailableFontFamilyNames(Locale.ROOT)) {
+                available.add(family);
+            }
+            for (String family : cands) {
+                if (available.contains(family)) {
+                    return new Font(family, Font.PLAIN, px);
+                }
+            }
+        } catch (Throwable ignored) {
+            // 拿不到字体列表就走 SANS_SERIF 兜底
+        }
+        return new Font(Font.SANS_SERIF, Font.PLAIN, px);
+    }
+
+    /**
+     * 按需光栅化单个字符到 {@link #GLYPH_CACHE}（含汉字）。供 {@link io.mirage.loader.MirageDebug#ensureRasterized}
+     * 在日志出现新汉字时调用；渲染线程不会走到这里，故可安全做 AWT 光栅化。
+     */
+    public static void rasterizeChar(char ch) {
+        if (textUnavailable) return;
+        int[] pxList = {GUI_TEXT_PX, GUI_TEXT_PX - 1};
+        for (int px : pxList) {
+            String key = px + "\u0000" + ch;
+            if (GLYPH_CACHE.containsKey(key)) continue;
+            Font f = (ch <= 126) ? font(px) : cjkFont(px);
+            int[] g = MirageDebug.rasterizePixelText(String.valueOf(ch), f);
+            int[] store = new int[3 + (g.length - 2)];
+            store[0] = (ch <= 126) ? ADVANCE.getOrDefault(px, Math.max(1, g[0])) : g[0];
+            store[1] = g[0];
+            store[2] = g[1];
+            System.arraycopy(g, 2, store, 3, g.length - 2);
+            GLYPH_CACHE.put(key, store);
+        }
     }
 
     /**
@@ -511,26 +662,6 @@ public final class ForgeStyleOverlay {
                 ? (fadeInField = field(target, name, fadeInField))
                 : field(target, name, null);
         return f.getBoolean(target);
-    }
-
-    /** 资源重载进度（{@code LoadingOverlay.currentProgress}），取不到退回加载器进度。 */
-    private static float configProgress(Object overlay) {
-        if (overlay != null) {
-            try {
-                Field f = currentProgressField;
-                if (f == null) {
-                    f = overlay.getClass().getDeclaredField("currentProgress");
-                    f.setAccessible(true);
-                    currentProgressField = f;
-                }
-                float v = f.getFloat(overlay);
-                if (v > 0f && v <= 1f) return v;
-            } catch (Throwable ignored) {
-            }
-        }
-        float p = MirageDebug.progress / 100f;
-        if (p > 0f) return clamp01(p);
-        return 0f;
     }
 
     // ---- 性能信息（与早期窗口同源同格式） ----

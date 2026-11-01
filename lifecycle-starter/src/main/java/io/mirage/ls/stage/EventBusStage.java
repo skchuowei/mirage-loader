@@ -32,6 +32,7 @@ public final class EventBusStage implements Stage {
 
     @Override
     public StageOutcome execute(LifecycleContext ctx) {
+        io.mirage.loader.MirageDebug.setPhase(4);
         Object bus = ctx.properties().get("S2.eventBus");
         Object mods = ctx.properties().get("S1.mods");
         Object mcl = ctx.properties().get("S3.classLoader");

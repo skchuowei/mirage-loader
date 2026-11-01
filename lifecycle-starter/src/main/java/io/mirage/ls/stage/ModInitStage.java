@@ -66,6 +66,7 @@ public final class ModInitStage implements Stage {
     @Override
     public StageOutcome execute(LifecycleContext ctx) {
         return StageSupport.guard(() -> {
+            MirageDebug.setPhase(5);
             List<ModContainer> mods = StageSupport.get(ctx, "S1.mods");
             EventBus eventBus = StageSupport.get(ctx, "S2.eventBus");
             MirageClassLoader mcl = StageSupport.get(ctx, "S3.classLoader");

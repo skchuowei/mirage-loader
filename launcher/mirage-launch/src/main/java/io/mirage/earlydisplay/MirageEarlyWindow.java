@@ -4,6 +4,7 @@ import io.mirage.api.log.MirageLog;
 
 import com.sun.management.OperatingSystemMXBean;
 import io.mirage.loader.MirageDebug;
+import io.mirage.loader.ForgeStyleLayout;
 
 import org.lwjgl.BufferUtils;
 import org.lwjgl.glfw.GLFW;
@@ -255,7 +256,9 @@ public final class MirageEarlyWindow {
 
         gl = new EarlyGl();
         gl.init();
-        font = new EarlyFont("/Monocraft.ttf", 0);
+        // 汉字全集 = UI 用字（两窗口共用）+ 日志用字（日志面板要显示真实中文日志）
+        font = new EarlyFont("/Monocraft.ttf", 0, findCjkFont(),
+                MirageDebug.LOADING_CJK_SOURCE + MirageDebug.LOADING_CJK_LOG_SOURCE);
 
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -321,7 +324,10 @@ public final class MirageEarlyWindow {
 
         drawMemoryBar(sx, sy);
         drawMemoryText(sx, sy);
-        drawProgressBars(sx, sy);
+        drawTotalProgress(sx, sy);
+        drawStageSummary(sx, sy);
+        drawStageStepper(sx, sy);
+        drawLogPanel(sx, sy);
         drawVersion(sx, sy);
     }
 
@@ -346,58 +352,106 @@ public final class MirageEarlyWindow {
     private void drawMemoryText(float sx, float sy) {
         String text = memoryText + "  " + cpuText;
         int x = DESIGN_WIDTH / 2 - font.stringWidth(text) / 2;
-        gl.begin();
-        font.drawText(gl, text, x, 10 + 18, COLOUR_WHITE, sx, sy);
-        gl.draw(EarlyGl.TYPE_FONT, 0);
+        // 早期窗口的 y 是「行盒顶」，必须用原始 TOP 常量；ForgeStyleLayout.*Y() 是 MC 锚点（+8）。
+        font.drawText(gl, text, x, ForgeStyleLayout.MEMORY_TEXT_TOP, COLOUR_WHITE, sx, sy);
     }
 
-    private void drawProgressBars(float sx, float sy) {
-        int barSpacing = font.lineSpacing() - font.descent() + 20;
-        String[] labels = {"Loading mods", "Config loading"};
-        float progress = clamp01(MirageDebug.progress / 100f);
-        int x0 = (DESIGN_WIDTH - BAR_WIDTH) / 2;
+    // ---- 总进度条（内存条下方，显示整体加载百分比） ----
 
-        for (int i = 0; i < labels.length; i++) {
-            int alpha = 0xFF >> i;
-            int colour = (alpha << 24) | 0x00FFFFFF;
+    private void drawTotalProgress(float sx, float sy) {
+        float p = clamp01(MirageDebug.progress / 100f);
+        int top = ForgeStyleLayout.TOTAL_BAR_TOP;
+        int barH = ForgeStyleLayout.TOTAL_BAR_HEIGHT;
+        int x0 = ForgeStyleLayout.barLeft();
+        int x1 = ForgeStyleLayout.barOuterRight();
+        int r = (int) (255 * (1f - p));
+        int g = (int) (255 * p);
+        int barColour = 0xFF000000 | (0x40 << 16) | (g << 8) | r;
+        gl.begin();
+        gl.quad(x0 * sx, x1 * sx, top * sy, (top + barH) * sy, 0, 0, 0, 0, COLOUR_WHITE);
+        gl.quad((x0 + 2) * sx, (x1 - 2) * sx, (top + 2) * sy, (top + barH - 2) * sy,
+                0, 0, 0, 0, COLOUR_BACKGROUND);
+        gl.quad((x0 + 4) * sx, (x0 + 4 + p * ForgeStyleLayout.BAR_WIDTH) * sx,
+                (top + 4) * sy, (top + barH - 4) * sy, 0, 0, 0, 0, barColour);
+        gl.draw(EarlyGl.TYPE_BAR, 0);
+        font.drawText(gl, "总进度 " + MirageDebug.progress + "%",
+                x0, ForgeStyleLayout.TOTAL_TEXT_TOP, COLOUR_WHITE, sx, sy);
+    }
 
-            float p0;
-            float p1;
-            if (i == 0) {
-                p0 = clamp01((frame % 100 - 2) / 100f);
-                p1 = clamp01((frame % 100 + 2) / 100f);
-            } else {
-                p0 = 0f;
-                p1 = progress;
+    // ---- 当前阶段摘要（总进度条下方，概括当前底层子任务） ----
+
+    private void drawStageSummary(float sx, float sy) {
+        font.drawText(gl, MirageDebug.stageSummary(),
+                ForgeStyleLayout.barLeft(), ForgeStyleLayout.STAGE_SUMMARY_TOP, COLOUR_WHITE, sx, sy);
+    }
+
+    // ---- S1–S7 步骤条（中部，已完成打勾/进行中高亮/待处理灰显） ----
+
+    private void drawStageStepper(float sx, float sy) {
+        int[] states = MirageDebug.phaseStates();
+        int listLeft = ForgeStyleLayout.barLeft();
+        int sqSize = 14;
+        for (int k = 0; k < states.length; k++) {
+            int sqX = listLeft;
+            int rowTop = ForgeStyleLayout.stageRowTop(k);
+            // 方块与文字墨迹对齐：早期窗口墨迹从行盒顶 +9 才开始
+            int sqY = rowTop + ForgeStyleLayout.EARLY_INK_OFFSET;
+            int sqColor;
+            int textColor;
+            switch (states[k]) {
+                case 2: // 已完成：绿底
+                    sqColor = 0xFF000000 | (0x55 << 16) | (0xFF << 8) | 0x55;
+                    textColor = 0xFF000000 | (0xCF << 16) | (0xCF << 8) | 0xCF;
+                    break;
+                case 1: // 进行中：黄底高亮（ABGR：B=55 G=FF R=FF）
+                    sqColor = 0xFF000000 | (0x55 << 16) | (0xFF << 8) | 0xFF;
+                    textColor = 0xFFFFFFFF;
+                    break;
+                default: // 待处理：暗灰
+                    sqColor = 0xFF000000 | (0x55 << 16) | (0x55 << 8) | 0x55;
+                    textColor = 0xFF000000 | (0x88 << 16) | (0x88 << 8) | 0x88;
+                    break;
             }
-
-            float y = 250 + i * barSpacing;
-            float by0 = y + font.lineSpacing() - font.descent();
-            float by1 = by0 + BAR_HEIGHT;
-
             gl.begin();
-            // 外框
-            gl.quad(x0 * sx, (x0 + BAR_WIDTH + 8) * sx, by0 * sy, by1 * sy, 0, 0, 0, 0, colour);
-            // 内衬
-            gl.quad((x0 + 2) * sx, (x0 + BAR_WIDTH + 6) * sx, (by0 + 2) * sy, (by1 - 2) * sy,
-                    0, 0, 0, 0, (alpha << 24) | 0x003D32EF);
-            // 填充
-            gl.quad((x0 + 4) * sx, (x0 + 4 + (p1 - p0) * BAR_WIDTH) * sx,
-                    (by0 + 4) * sy, (by1 - 4) * sy, 0, 0, 0, 0, colour);
+            gl.quad(sqX * sx, (sqX + sqSize) * sx, sqY * sy, (sqY + sqSize) * sy, 0, 0, 0, 0, sqColor);
             gl.draw(EarlyGl.TYPE_BAR, 0);
+            font.drawText(gl, "S" + (k + 1) + " " + MirageDebug.PHASE_NAMES[k],
+                    sqX + sqSize + 6, rowTop, textColor, sx, sy);
+        }
+    }
 
-            gl.begin();
-            font.drawText(gl, labels[i], x0, (int) y, colour, sx, sy);
-            gl.draw(EarlyGl.TYPE_FONT, 0);
+    // ---- 底部滚动日志面板（占屏幕约 1/3，从下到上滚动，节选真实加载日志） ----
+
+    private void drawLogPanel(float sx, float sy) {
+        int margin = 8;
+        int panelTop = ForgeStyleLayout.logPanelTop();
+        int panelBottom = ForgeStyleLayout.DESIGN_HEIGHT;
+        gl.begin();
+        gl.quad(margin * sx, (DESIGN_WIDTH - margin) * sx, panelTop * sy, panelBottom * sy,
+                0, 0, 0, 0, 0xFF141414);
+        gl.draw(EarlyGl.TYPE_BAR, 0);
+
+        font.drawText(gl, "日志（实时）", margin + 4, panelTop + 4, 0xFFAAAAAA, sx, sy);
+
+        // 24px 字墨迹高 17px（y+9..y+26），行距取 22 才有 5px 间隙；行数由「首行~底边」预算决定
+        int lineH = ForgeStyleLayout.LOG_LINE_H;
+        int firstTop = ForgeStyleLayout.logFirstLineTop();
+        int bottomTop = panelBottom - ForgeStyleLayout.LOG_BOTTOM_MARGIN - lineH;
+        int maxLines = Math.max(1, (bottomTop - firstTop) / lineH + 1);
+        String[] lines = MirageDebug.loadingLogLines();
+        int start = Math.max(0, lines.length - maxLines);
+        int y = bottomTop;
+        int maxTextW = DESIGN_WIDTH - 2 * margin - 8;
+        for (int k = lines.length - 1; k >= start; k--) {
+            String raw = lines[k];
+            font.drawText(gl, truncate(raw, maxTextW), margin + 4, y, logColor(raw), sx, sy);
+            y -= lineH;
         }
     }
 
     private void drawVersion(float sx, float sy) {
-        int x = DESIGN_WIDTH - font.stringWidth(versionLabel) - 10;
-        int y = DESIGN_HEIGHT - font.lineSpacing() + font.descent() - 10;
-        gl.begin();
-        font.drawText(gl, versionLabel, x, y, COLOUR_WHITE, sx, sy);
-        gl.draw(EarlyGl.TYPE_FONT, 0);
+        int x = DESIGN_WIDTH - font.stringWidth(versionLabel) - ForgeStyleLayout.VERSION_MARGIN;
+        font.drawText(gl, versionLabel, x, ForgeStyleLayout.VERSION_TOP_RIGHT, COLOUR_WHITE, sx, sy);
     }
 
     private void updatePerformance() {
@@ -507,4 +561,60 @@ public final class MirageEarlyWindow {
     private static float clamp01(float v) {
         return v < 0f ? 0f : (v > 1f ? 1f : v);
     }
+
+    private static int logColor(String line) {
+        if (line.contains("ERROR") || line.contains("Exception")
+                || line.contains("失败") || line.contains("错误")) {
+            return 0xFF7777FF;
+        }
+        if (line.contains("WARN") || line.contains("警告")) {
+            return 0xFF77FFFF;
+        }
+        return 0xFFBBBBBB;
+    }
+
+    private String truncate(String s, int maxW) {
+        if (s == null) return "";
+        if (font.stringWidth(s) <= maxW) return s;
+        String t = s;
+        while (t.length() > 1 && font.stringWidth(t + "...") > maxW) {
+            t = t.substring(0, t.length() - 1);
+        }
+        return t + "...";
+    }
+
+    private static String findCjkFont() {
+        String[] candidates = {
+                "C:/Windows/Fonts/msyh.ttc",
+                "C:/Windows/Fonts/msyhbd.ttc",
+                "C:/Windows/Fonts/simsun.ttc",
+                "C:/Windows/Fonts/simhei.ttf",
+                "C:/Windows/Fonts/msjh.ttc",
+                "/System/Library/Fonts/PingFang.ttc",
+                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+        };
+        for (String p : candidates) {
+            if (new File(p).isFile()) return p;
+        }
+        File dir = new File("C:/Windows/Fonts");
+        if (dir.isDirectory()) {
+            String[] names = dir.list();
+            if (names != null) {
+                for (String name : names) {
+                    String lower = name.toLowerCase(Locale.ROOT);
+                    if (lower.endsWith(".ttc") || lower.endsWith(".ttf") || lower.endsWith(".otf")) {
+                        if (lower.contains("msyh") || lower.contains("sim") || lower.contains("yahei")
+                                || lower.contains("noto") || lower.contains("cjk") || lower.contains("hei")
+                                || lower.contains("song") || lower.contains("pingfang")
+                                || lower.contains("wenquan") || lower.contains("source")) {
+                            return new File(dir, name).getAbsolutePath();
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+
 }

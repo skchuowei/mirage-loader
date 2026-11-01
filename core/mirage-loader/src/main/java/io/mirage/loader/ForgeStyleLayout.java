@@ -62,6 +62,47 @@ public final class ForgeStyleLayout {
     /** 版本号右边缘留白。 */
     public static final int VERSION_MARGIN = 10;
 
+    // ---- 新版加载调试信息布局（早期窗口与原生 MC 窗口共用，设计坐标 854×480） ----
+    //
+    // 纵向排布（早期窗口「文本左上 y」语义，墨迹约在 y+9..y+26；MC 锚点 = y+8）：
+    //   内存条 10..30 → 内存文字 28(墨迹 37..54) → 总进度条 58..72 → 总进度标签 74
+    //   → 阶段摘要 104 → 步骤条 7 行 136..(136+6×24=280，墨迹至 306) → 日志面板 312..480
+    /** 总进度条顶边（必须在内存文字墨迹(≈54)之下，否则压字）。 */
+    public static final int TOTAL_BAR_TOP = 58;
+    /** 总进度条高度。 */
+    public static final int TOTAL_BAR_HEIGHT = 14;
+    /** 总进度标签「文本左上 y」（条下方）。 */
+    public static final int TOTAL_TEXT_TOP = 74;
+    /** 当前阶段摘要「文本左上 y」（概括当前底层子任务）。 */
+    public static final int STAGE_SUMMARY_TOP = 104;
+    /** 步骤条首行「文本左上 y」（原两条进度条所在的中部区域）。 */
+    public static final int STAGE_LIST_TOP = 136;
+    /** 步骤条每行行距（≥ 墨迹高 17 + 行距 7，保证行间不粘连）。 */
+    public static final int STAGE_ROW_H = 24;
+    /** 步骤条阶段数（S1..S7）。 */
+    public static final int STAGE_COUNT = 7;
+    /** 步骤条状态方块边长。 */
+    public static final int STAGE_SQUARE = 10;
+    /** 底部滚动日志面板顶边（占屏幕约 1/3）。 */
+    public static final int LOG_PANEL_TOP = 312;
+    /** 日志面板标题行高（标题之后才是日志行）。 */
+    public static final int LOG_HEADER_H = 26;
+    /** 日志面板每行行距（24px 字墨迹高 17，留 5px 行间）。 */
+    public static final int LOG_LINE_H = 22;
+    /** 日志面板底部留白。 */
+    public static final int LOG_BOTTOM_MARGIN = 8;
+    /** 版本号改到右上角时的「文本左上 y」。 */
+    public static final int VERSION_TOP_RIGHT = 12;
+
+    /**
+     * 早期窗口里「文本左上 y」→「字形墨迹顶」的偏移（STB 实测 Monocraft 24px 的 {@code y0=9}）。
+     *
+     * <p>早期窗口的 {@code drawText} 以行盒顶为锚点，墨迹从 {@code y+9} 才开始；
+     * 主窗口的 MC 字体则几乎贴锚点。两窗口要画同一个方块/色块时，早期窗口这边必须
+     * 自己补上这 9px，否则方块会浮在文字上方。
+     */
+    public static final int EARLY_INK_OFFSET = 9;
+
     /**
      * 早期窗口「文本左上 y」→ MC 字体顶部锚点的偏移。
      *
@@ -127,6 +168,41 @@ public final class ForgeStyleLayout {
     /** 版本号的 MC 字体顶部锚点。 */
     public static int versionTextY() {
         return VERSION_TOP + MC_TEXT_OFFSET;
+    }
+
+    /** 版本号（右上角）的 MC 字体顶部锚点。 */
+    public static int versionTopRightY() {
+        return VERSION_TOP_RIGHT + MC_TEXT_OFFSET;
+    }
+
+    /** 总进度标签的 MC 字体顶部锚点。 */
+    public static int totalTextY() {
+        return TOTAL_TEXT_TOP + MC_TEXT_OFFSET;
+    }
+
+    /** 当前阶段摘要的 MC 字体顶部锚点。 */
+    public static int stageSummaryY() {
+        return STAGE_SUMMARY_TOP + MC_TEXT_OFFSET;
+    }
+
+    /** 第 index 行步骤条的「文本左上 y」。 */
+    public static int stageRowTop(int index) {
+        return STAGE_LIST_TOP + index * STAGE_ROW_H;
+    }
+
+    /** 第 index 行步骤条的 MC 字体顶部锚点。 */
+    public static int stageRowTextY(int index) {
+        return stageRowTop(index) + MC_TEXT_OFFSET;
+    }
+
+    /** 底部日志面板顶边（MC 字体锚点，与 {@link #LOG_PANEL_TOP} 同值）。 */
+    public static int logPanelTop() {
+        return LOG_PANEL_TOP;
+    }
+
+    /** 日志面板第一行可绘制的「文本左上 y」（标题行之后）。 */
+    public static int logFirstLineTop() {
+        return LOG_PANEL_TOP + LOG_HEADER_H;
     }
 
     private static float clamp01(float v) {

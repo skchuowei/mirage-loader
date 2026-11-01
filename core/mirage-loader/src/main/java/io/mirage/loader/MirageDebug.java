@@ -41,6 +41,57 @@ public final class MirageDebug {
     private static final OperatingSystemMXBean osBean = ManagementFactory.getOperatingSystemMXBean();
     private static volatile String lastLogLine = "";
 
+    /** 加载界面底部滚动日志节选（最近 16 行，比 HUD 多，用于占屏幕 1/3~1/4 的日志面板）。 */
+    private static final int LOADING_LOG_CAPACITY = 16;
+    private static final Deque<String> loadingLog = new ArrayDeque<>(LOADING_LOG_CAPACITY);
+
+    /**
+     * 加载界面要显示的汉字全集（阶段名 / 子任务名 / 面板标题 / 常见报错词 / 必要标点）。
+     * 主窗口（ForgeStyleOverlay）用 AWT 逐字光栅化这些字；早期窗口（EarlyFont）把它们
+     * 打包进 STB 图集。两窗口共用这一份，避免两边汉字不一致。
+     */
+    public static final String LOADING_CJK_SOURCE =
+            "发现解析清单字节码变换合并注册表事件总线初始化启动客户端"
+            + "创建类加载器扫描目录检测版本解冻修补冻结加载脚本已"
+            + "总进度当前阶段日志实时失败错误异常缺无法资源方法字段警告"
+            + "找不到跳过忽略冲突信息模式完成进行待处理·—：（）";
+
+    /**
+     * 日志面板要显示的中文全集：从全仓库字符串字面量扫描得到（594 字，含标点）。
+     *
+     * <p>为什么需要它：早期窗口用 STB 图集，<b>没打包的字根本画不出来</b>（按字宽留空），
+     * 而 Mirage 自己的日志几乎全是中文（{@code [Mirage] 早期窗口已显示…}）——只打包 UI 用字
+     * 会让日志面板变成一片空白。主窗口（AWT 版）不需要它，那边由
+     * {@link #ensureRasterized} 按需补字。
+     *
+     * <p>重新生成：扫描 {@code core/ lifecyle/ launcher/ api/ modules/ compat/} 下所有
+     * {@code .java} 字符串字面量里的非 ASCII 字符，去重排序后按 40 字一行拼接。
+     */
+    public static final String LOADING_CJK_LOG_SOURCE =
+            "·—←→≠、。「」一上下不与丢严个中串为主久么义之也了事二于互些交产人什仅仍从仓"
+            + "他代以件任份会伪但位体何余作你使例供依便保信修值停像允元先兜入全公共关其典兼内册"
+            + "再写冲冻准出函分列则创初别到制前副力功加务动包化匹区匿半单占印即历原去参又及双反"
+            + "发取受变叠口句另只可台右号各合同名后向吗否含听启告周命和品响哪器回因图在场坐块型"
+            + "基堆填境声处复外多大太失头如始委子字存它守安完定实客容对射将小少尔尚就尾局层属左"
+            + "已布常并幻序库应底度延建开异弃式引强归当录形影径待循心必志忽态性总恢息想意戏成我"
+            + "或截戳户所扑打执扫批找抛报拒拓拦择括拼拿持挂指按捕换据掉排探接控推掺描提插摘支收"
+            + "改放效数整文断新方无日旧早时明映是显普景暂暴更替最有服望期未末本束条来板构析果柄"
+            + "某染查标栈栏根格桥桩检模次止正此步死残段毁每比永求汇沙没法注活派测消涉深混添清渲"
+            + "游源满滤点版物状独玩环现理生用由画界留略登的监盒盖盘目直相省看真知码硬确示禁离私"
+            + "种秒移程空突窗立端符第等策签简算管箱类系素紧级纹线组织经绑结绘给络绝统继绪续缀缓"
+            + "编缩缺网罩置翻者而聚背能脚脱自至致节花若获落行补表衬被装要覆见视角解触言警订认让"
+            + "记许设访识诊译试询该语误请读谁调象败费资赋赖走起超越足跑跟跨路跳转轴轻载较辑输边"
+            + "达过运还这进远违迟述追退送选透逐递通造逻遍道遮那部都配采释里重量钮链销错键长门闭"
+            + "问间阅阶阻附际降限除隔集需露静非面页顺须预题额首骤默鼠齐（），：；？";
+
+    // ---- S1–S7 主阶段模型（供加载界面步骤条与阶段摘要使用） ----
+    /** 当前所处主阶段索引 0..6（S1..S7）。由各阶段在入口处 {@link #setPhase} 标注。 */
+    public static volatile int phase = 0;
+    public static final int STAGE_COUNT = 7;
+    public static final String[] PHASE_NAMES = {
+            "发现Mod", "解析清单", "字节码变换", "合并注册表", "事件总线", "初始化Mod", "启动客户端"
+    };
+
     public static void setStage(String s) { stage = s; }
     public static void setProgress(int p) { progress = p; }
     public static void setModCount(int n) { modCount = n; }
@@ -48,6 +99,54 @@ public final class MirageDebug {
     public static void setCurrentMod(String id) { currentMod = id; }
     public static void setModList(String s) { modList = s; }
     public static void setLoaded() { loaded = true; }
+
+    /** 标注当前主阶段（S1..S7 对应 0..6），供加载界面步骤条定位「进行中/已完成」。 */
+    public static void setPhase(int p) {
+        if (p >= 0 && p < STAGE_COUNT) phase = p;
+    }
+
+    /** 各阶段状态：2=已完成 / 1=进行中 / 0=待处理。 */
+    public static int[] phaseStates() {
+        int[] r = new int[STAGE_COUNT];
+        for (int i = 0; i < STAGE_COUNT; i++) {
+            r[i] = i < phase ? 2 : (i == phase ? 1 : 0);
+        }
+        return r;
+    }
+
+    /** 当前阶段摘要，例如 "S4 合并注册表 · 解冻注册表 (42%)"。 */
+    public static String stageSummary() {
+        int p = phase;
+        if (p < 0) p = 0;
+        if (p >= STAGE_COUNT) p = STAGE_COUNT - 1;
+        String sub = stage == null ? "" : stage;
+        return "S" + (p + 1) + " " + PHASE_NAMES[p] + " · " + sub + " (" + progress + "%)";
+    }
+
+    /** 加载界面底部滚动日志（最近最多 16 行，旧→新）。 */
+    public static String[] loadingLogLines() {
+        synchronized (recentLogs) {
+            return loadingLog.toArray(new String[0]);
+        }
+    }
+
+    /**
+     * 日志出现新汉字时，触发主窗口像素字缓存的按需光栅化。
+     * 仅对 >126 的码位触发，且每个码位只光栅化一次；渲染线程不会走到这里（日志来自
+     * Launcher tee 与 MC worker 线程），故 AWT 调用安全。
+     */
+    private static final java.util.Set<Integer> rasterizedCjk =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+    public static void ensureRasterized(String s) {
+        if (s == null) return;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c <= 126) continue;
+            int cp = c;
+            if (!rasterizedCjk.add(cp)) continue;
+            io.mirage.loader.ForgeStyleOverlay.rasterizeChar(c);
+        }
+    }
 
     /**
      * ASM 织入 VanillaPackResourcesBuilder.build() 时调用。
@@ -201,7 +300,12 @@ public final class MirageDebug {
             lastLogLine = s;
             if (recentLogs.size() >= LOG_CAPACITY) recentLogs.pollFirst();
             recentLogs.addLast(s);
+            if (loadingLog.size() >= LOADING_LOG_CAPACITY) loadingLog.pollFirst();
+            loadingLog.addLast(s);
         }
+        // 主窗口像素字缓存按需光栅化汉字（早期窗口走 STB 图集，无须此路径）。
+        // 只在调用线程上做 AWT 光栅化，不在渲染线程，安全。
+        ensureRasterized(s);
     }
 
     /**

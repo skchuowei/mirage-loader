@@ -17,9 +17,14 @@
 #   反射要读的四个字段），直接调 ForgeStyleOverlay.draw()，然后检查它到底往 fill 里灌了什么：
 #     1. 第一块必须是全屏红底（0xFFEF323D），否则整块界面都没了；
 #     2. 必须存在大量「小矩形」（字形的像素块）—— 这条就是回归守卫：回到 text() 时这里是 0；
-#     3. 文字块必须落在四个预期区域（内存文字 / 两个标签 / 版本号），且不越出画布；
+#     3. 文字块必须落在各个预期区域（内存文字 / 总进度标签 / 阶段摘要 / S1–S7 七行 /
+#        日志面板 / 右上角版本号），且不越出画布；
 #     4. 内存文字水平居中、版本号右对齐（这两处是布局正确与否的直接证据）；
-#     5. GUI 尺寸减半（sx=0.5）时仍然出字，且字形块尺寸同比变小（字号按 sx 现算，不是固定 12px）。
+#     5. 步骤条最后一行不能压进日志面板（布局重叠的直接证据）；
+#     6. GUI 尺寸减半（sx=0.5）时仍然出字，且字形块尺寸同比变小（字号按 sx 现算，不是固定 12px）。
+#
+#   用例会先 MirageDebug.log() 喂 16 行、并把阶段设到 S4，否则日志面板/摘要带本来就该是空的，
+#   「日志带有字」这条断言永远红，等于没测。
 #
 #   为什么不用实机截图当唯一证据：截图只能证明"这一次没字"，证明不了"以后改回 text() 会被发现"。
 #
@@ -38,6 +43,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 $files = @{
     "MirageLog.java"         = Join-Path $root "api\mirage-api\src\main\java\io\mirage\api\log\MirageLog.java"
+    "MiragePerf.java"        = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\MiragePerf.java"
     "MirageDebug.java"       = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\MirageDebug.java"
     "ForgeStyleLayout.java"  = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\ForgeStyleLayout.java"
     "ForgeStyleOverlay.java" = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\ForgeStyleOverlay.java"
@@ -167,20 +173,36 @@ public final class ForgeStyleTextCheck {
         // 预渲染字符字形（同步、主线程）—— 与生产环境 Launcher.main 调用 prewarm() 一致。
         // 字符级方案下 glyph 缓存必须先就绪，draw 才查得到字、首帧即有字。
         ForgeStyleOverlay.prewarm();
+        // 造出「加载进行中」的真实状态：没有日志/阶段时，日志面板与摘要带本来就该是空的，
+        // 那样「日志带有字」这条断言永远红，等于没测。
+        for (int i = 1; i <= 16; i++) {
+            MirageDebug.log("[Mirage] boot step " + i + " / 16 done");
+        }
+        MirageDebug.setPhase(3);            // S4 合并注册表（进行中），S1..S3 应为已完成
+        MirageDebug.setStage("unfreeze registry");
+        MirageDebug.setProgress(42);
         // 两种 GUI 尺寸：854x480 是 guiScale=1 的默认窗口；427x240 是同一窗口 guiScale=2
         scenario("S1", 854, 480);
         scenario("S2", 427, 240);
     }
 
+    /** 设计坐标里的「MC 字体顶部锚点」：早期窗口 TOP + 8。 */
+    private static int mc(int designTop) {
+        return designTop + ForgeStyleLayout.MC_TEXT_OFFSET;
+    }
+
     private static void scenario(String tag, int gw, int gh) {
         FakeGge gge = new FakeGge(gw, gh);
         FakeOverlay overlay = new FakeOverlay();
-        // 画几帧：frame 计数会影响第一条进度条的动画位置
+        // 画几帧：确保绘制路径稳定（draw 内无帧计数状态，重复绘制结果一致）
         for (int i = 0; i < 5; i++) {
             gge.rects.clear();
             ForgeStyleOverlay.draw(overlay, gge);
         }
         List<Rect> rects = gge.rects;
+
+        double sx = gw / (double) ForgeStyleLayout.DESIGN_WIDTH;
+        double sy = gh / (double) ForgeStyleLayout.DESIGN_HEIGHT;
 
         System.out.println("STAT " + tag + ".total=" + rects.size());
         if (rects.isEmpty()) {
@@ -209,48 +231,99 @@ public final class ForgeStyleTextCheck {
         System.out.println("STAT " + tag + ".glyphmaxh=" + maxGlyphH);
         System.out.println("STAT " + tag + ".overflow=" + overflow);
 
-        // 四个文字带（设计坐标 × sy 之后的实际像素带，留 ±6 容差）
-        double sy = gh / 480.0;
-        band(tag, "memory", rects, 28 * sy, 34 * sy + 22);
-        band(tag, "label0", rects, 250 * sy, 266 * sy + 22);
-        band(tag, "label1", rects, 299 * sy, 315 * sy + 22);
-        band(tag, "version", rects, 441 * sy, 457 * sy + 22);
+        // ---- 文字带（设计坐标，统一按 sy 换算；容差 ±2px） ----
+        int memTop = mc(ForgeStyleLayout.MEMORY_TEXT_TOP);
+        band(tag, "memory", rects, sy, memTop, memTop + 10);
 
-        // 内存文字水平居中：取该带里字形块的最小 x 与最大 x1
-        int[] mem = bandExtent(rects, 28 * sy, 34 * sy + 22);
+        int totTop = mc(ForgeStyleLayout.TOTAL_TEXT_TOP);
+        band(tag, "total", rects, sy, totTop, totTop + 10);
+
+        int sumTop = mc(ForgeStyleLayout.STAGE_SUMMARY_TOP);
+        band(tag, "summary", rects, sy, sumTop, sumTop + 10);
+
+        for (int k = 0; k < ForgeStyleLayout.STAGE_COUNT; k++) {
+            int rowTop = mc(ForgeStyleLayout.stageRowTop(k));
+            band(tag, "stage" + k, rects, sy, rowTop, rowTop + 16);
+        }
+
+        band(tag, "log", rects, sy, ForgeStyleLayout.LOG_PANEL_TOP, ForgeStyleLayout.DESIGN_HEIGHT);
+
+        int verTop = mc(ForgeStyleLayout.VERSION_TOP_RIGHT);
+        band(tag, "version", rects, sy, verTop, verTop + 10);
+
+        // 内存文字水平居中：取该带里字形块的最小 x 与最大 x1。
+        // 右上角版本号在 guiScale=2 时会与内存行垂直各压 2px（文字块固定 10 GUI px，
+        // 行距却按 sy 缩放），这里用水平上限把版本区排除，否则量到的是版本号的右边缘。
+        int[] mem = bandExtent(rects, sy, memTop, memTop + 10,
+                gw - Math.round(200 * (float) sx));
         double center = (mem[0] + mem[1]) / 2.0;
         System.out.println("STAT " + tag + ".memcenter=" + Math.round(center));
         System.out.println("STAT " + tag + ".canvascenter=" + (gw / 2));
-        System.out.println("STAT " + tag + ".vermargin=" + Math.round(10 * (gw / 854.0)));
+        System.out.println("STAT " + tag + ".vermargin=" + Math.round(ForgeStyleLayout.VERSION_MARGIN * sx));
 
         // 版本号右对齐：最右端应贴近 gw - 10*sx
-        int[] ver = bandExtent(rects, 441 * sy, 457 * sy + 22);
+        int[] ver = bandExtent(rects, sy, verTop, verTop + 10);
         System.out.println("STAT " + tag + ".verright=" + ver[1]);
+
+        // 步骤条最后一行不得压进日志面板（布局重叠的直接证据）
+        int lastRow = mc(ForgeStyleLayout.stageRowTop(ForgeStyleLayout.STAGE_COUNT - 1));
+        System.out.println("STAT " + tag + ".stagelast="
+                + bandBottom(rects, sy, lastRow, lastRow + 16));
+        System.out.println("STAT " + tag + ".logtop=" + Math.round(ForgeStyleLayout.LOG_PANEL_TOP * sy));
     }
 
-    private static void band(String tag, String name, List<Rect> rects, double y0, double y1) {
+    private static void band(String tag, String name, List<Rect> rects, double sy,
+                             double dy0, double dy1) {
         int n = 0;
         int area = 0;
         for (Rect r : rects) {
             if (!r.isGlyph()) continue;
-            if (r.y0 >= y0 - 2 && r.y1 <= y1 + 2) { n++; area += r.area(); }
+            if (inBand(r, sy, dy0, dy1)) { n++; area += r.area(); }
         }
         System.out.println("STAT " + tag + ".band." + name + "=" + n + "," + area);
     }
 
+    /**
+     * 块中心的 y 是否落在带内。
+     *
+     * <p>不能用「整块都在带内」：字形块高是固定 GUI 像素（{@code GUI_TEXT_PX}），
+     * 不随 sy 缩放；guiScale=2（sy=0.5）时 10px 高的行比设计空间里 20px 的间距还高，
+     * 整块过滤会把上一行（版本号）的块也吞进内存行，水平居中那条断言因此假红。
+     */
+    private static boolean inBand(Rect r, double sy, double dy0, double dy1) {
+        double cy = (r.y0 + r.y1) / 2.0;
+        return cy >= dy0 * sy - 1 && cy <= dy1 * sy + 1;
+    }
+
     /** 返回该带里字形块的 [minX, maxX1]，没有块时返回 [-1, -1]。 */
-    private static int[] bandExtent(List<Rect> rects, double y0, double y1) {
+    private static int[] bandExtent(List<Rect> rects, double sy, double dy0, double dy1) {
+        return bandExtent(rects, sy, dy0, dy1, Integer.MAX_VALUE);
+    }
+
+    /** 同上，但只统计左边缘 &lt; {@code xMax} 的块（用于排除右上角版本号）。 */
+    private static int[] bandExtent(List<Rect> rects, double sy, double dy0, double dy1, int xMax) {
         int minX = Integer.MAX_VALUE;
         int maxX = Integer.MIN_VALUE;
         for (Rect r : rects) {
             if (!r.isGlyph()) continue;
-            if (r.y0 >= y0 - 2 && r.y1 <= y1 + 2) {
+            if (r.x0 >= xMax) continue;
+            if (inBand(r, sy, dy0, dy1)) {
                 if (r.x0 < minX) minX = r.x0;
                 if (r.x1 > maxX) maxX = r.x1;
             }
         }
         if (minX == Integer.MAX_VALUE) return new int[]{-1, -1};
         return new int[]{minX, maxX};
+    }
+
+    /** 该带里字形块的最大 y1（底边），没有块时返回 -1。 */
+    private static int bandBottom(List<Rect> rects, double sy, double dy0, double dy1) {
+        int bottom = -1;
+        for (Rect r : rects) {
+            if (!r.isGlyph()) continue;
+            if (inBand(r, sy, dy0, dy1) && r.y1 > bottom) bottom = r.y1;
+        }
+        return bottom;
     }
 }
 '@
@@ -264,6 +337,7 @@ $compile = Invoke-Native $javac @(
     "-encoding", "UTF-8",
     "-d", $classes,
     $files["MirageLog.java"],
+    $files["MiragePerf.java"],
     $files["MirageDebug.java"],
     $files["ForgeStyleLayout.java"],
     $files["ForgeStyleOverlay.java"],
@@ -346,11 +420,20 @@ foreach ($tag in @("S1", "S2")) {
     Assert-True ([math]::Abs($verRight - ($canvasCenter * 2 - $verMargin)) -le 6) `
         "版本号右对齐到画布右缘 - 边距（实际右端 $verRight，期望 $($canvasCenter * 2 - $verMargin)）"
 
-    foreach ($band in @("memory", "label0", "label1", "version")) {
+    # 新版布局的每个文字带都必须有字：总进度标签 / 阶段摘要 / S1–S7 七行 / 日志面板 / 版本号(右上)
+    foreach ($band in @("memory", "total", "summary", "version", "log",
+                        "stage0", "stage1", "stage2", "stage3", "stage4", "stage5", "stage6")) {
         $raw = Stat $tag "band.$band"
         $n = [int](($raw -split ",")[0])
-        Assert-True ($n -ge 8) "文字带 $band 有字（块数 $n >= 8）"
+        Assert-True ($n -ge 6) "文字带 $band 有字（块数 $n >= 6）"
     }
+
+    # 布局不重叠：步骤条最后一行必须整体在日志面板之上
+    $stageLast = [int](Stat $tag "stagelast")
+    $logTop = [int](Stat $tag "logtop")
+    Assert-True ($stageLast -gt 0) "步骤条最后一行有字形（底部 $stageLast）"
+    Assert-True ($stageLast -le $logTop) `
+        "步骤条最后一行($stageLast) 不越过日志面板顶边($logTop)"
 }
 
 # ---------------------------------------------------------------- 源码守卫

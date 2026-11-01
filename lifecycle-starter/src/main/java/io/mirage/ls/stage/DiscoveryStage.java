@@ -43,6 +43,7 @@ public final class DiscoveryStage implements Stage {
     @Override
     public StageOutcome execute(LifecycleContext ctx) {
         return StageSupport.guard(() -> {
+            io.mirage.loader.MirageDebug.setPhase(0);
             io.mirage.loader.MirageDebug.setStage("扫描 mods 目录");
             io.mirage.loader.MirageDebug.setProgress(3);
             Path gameDir = ctx.gameDir();

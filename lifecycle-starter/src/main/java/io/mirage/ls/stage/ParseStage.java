@@ -50,6 +50,7 @@ public final class ParseStage implements Stage {
     public StageOutcome execute(LifecycleContext ctx) {
         // 不用 StageSupport.guard：失败策略的 FATAL 结论需要作为 StageOutcome 直接返回
         // （guard 会把阶段体统一收敛成 success，吞掉 crash/abort 结论）。
+        io.mirage.loader.MirageDebug.setPhase(1);
         try {
             List<ModContainer> mods = StageSupport.get(ctx, "S1.mods");
 

@@ -66,6 +66,7 @@ public final class RegistryWindow {
      * 全程与拆分前 Launcher 逐行同序同日志。
      */
     public static RegistryWindow open(LifecycleContext ctx) throws Exception {
+        io.mirage.loader.MirageDebug.setPhase(3);
         ClassLoader mcl = StageSupport.get(ctx, "S3.classLoader");
 
         // 性能埋点：S4 是实测唯一的大头（6.8~25.9 s），阶段粒度答不出「这 7 秒花在哪」。
