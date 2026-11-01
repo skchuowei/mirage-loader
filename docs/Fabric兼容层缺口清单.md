@@ -6,6 +6,8 @@
 > Launcher 专用服务端 entrypoints 路径）。可让"注册 lifecycle/tick 回调、收发包、带 data/ 资源"的
 > Fabric mod 跑通；**fabric-api-events 其余 20+ 回调类（P0-2）、fabric-api-registry（P0-3）仍缺失**。
 > 网络/tick 桥接的已知限制见文末"桥接 stub 限制汇总"。文中"已具备"均以代码为准，不采信旧文档。
+> **2026-11-01**：已实现部分的功能模块/实现细节/边界验证清单另见 `docs/Fabric兼容层-功能模块与实现说明.md`；
+> 本轮盘点新增缺口两条（mod 自带 mixin config、depends 依赖检查，见下文 P1-13/P1-14）。
 
 ---
 
@@ -13,9 +15,9 @@
 
 | 能力 | 状态 |
 |---|---|
-| fabric.mod.json 解析 | ✅ `core/mirage-loader/FabricModManifest` + `modules/mirage-fabric-compat/ModsJsonParser` |
+| ~~fabric.mod.json 解析 | ✅ `core/mirage-loader/FabricModManifest` + `modules/mirage-fabric-compat/ModsJsonParser`~~ **【已过时·2026-11-01】** 运行时解析只走 `core/mirage-loader/FabricModManifest`（`ModDiscoverer` 唯一调用点）；`modules/mirage-fabric-compat/io/mirage/fabric/{ModsJsonParser,OutputModel}` 是硬解码器早期遗留死代码，全仓无调用方。修正后：fabric.mod.json 解析 = ✅ `core/mirage-loader/FabricModManifest`（不含 mixins/accessWideners 字段） |
 | `ModInitializer` / `ClientModInitializer` 接口 | ✅ `api/mirage-api/net/fabricmc/api/` |
-| entrypoints 实际反射调用 | ✅ `launcher/.../Launcher.callOnInitialize` + client 侧 `instanceof ClientModInitializer` 分派（`runtime-wiring-changelog` 已接通） |
+| ~~entrypoints 实际反射调用 | ✅ `launcher/.../Launcher.callOnInitialize` + client 侧 `instanceof ClientModInitializer` 分派（`runtime-wiring-changelog` 已接通）~~ **【已过时·2026-11-01】** LS 拆分后逻辑迁至 lifecycle-starter。修正后：entrypoints 实际反射调用 = ✅ `lifecycle-starter/.../stage/ModInitStage`（`ModEntrypoints` 出入口列表 + `instanceof ModInitializer/ClientModInitializer` 分派 + 反射回退） |
 | MG 生命周期事件 post | ✅ `ModConstruct/PreInit/Init/PostInit` 经 `io.mirage.eventbus` 派发 |
 | Fabric `Event` / `EventFactory` | ✅ 本次落地：`modules/mirage-fabric-compat/.../net/fabricmc/fabric/api/event/` |
 | `lifecycle-v1` 事件类 | ✅ 本次落地：`ServerLifecycleEvents`（Starting/Started/Stopping/Stopped）+ `ClientLifecycleEvents`（Starting/Started/Stopping） |
@@ -130,12 +132,30 @@ client 子集其余回调（`ClientEntityEvents` 等）仍缺口，归 P0-2 一�
 
 #### 9. accessWideners 桥接
 
-`fabric.mod.json` 的 `accessWideners` 字段是否已被 `FabricModManifest` 解析需确认；
-即使解析了，运行时 AT 注入（放宽访问级别）未做。
+~~`fabric.mod.json` 的 `accessWideners` 字段是否已被 `FabricModManifest` 解析需确认；即使解析了，运行时 AT 注入（放宽访问级别）未做。~~ **【定案·2026-11-01】** `FabricModManifest` **不解析**该字段（字段级解析只存在于死代码 `ModsJsonParser`，见顶部"已过时"注记）；运行时 AT 注入未做。声明 accessWidener 的 mod 访问放宽成员会 `IllegalAccessError`。
 
 #### 10. 指令事件（fabric-api-command）
 
 `CommandRegistrationCallback` 未实现。
+
+#### 13. mod 自带 mixin config 不加载（2026-11-01 新列，建议 P1）
+
+**现状**：`FabricModManifest` 不解析 fabric.mod.json 的 `mixins` 字段；`MirageMixinBootstrap` 只加载自家
+`mirage.mixins.json` 单一配置。mod jar 内的 `*.mixins.json` 完全不会被注册进 mixin 环境。
+
+**问题**：真实 Fabric mod 几乎必带 mixin——不会被织入，mod 引用 mixin 派生类型（duck interface、
+@Shadow 暴露成员）时 `NoClassDefFoundError`/`NoSuchMethodError`。这是"注册 lifecycle 的极简 mod 能跑、
+真实 mod 链接期就炸"的主要结构性缺口之一。
+
+**修复方向**：ModDiscoverer 解析 `mixins` 字段存入 ModContainer → S3/S4 把 mod jar 内 mixin config
+注册进 mixin 环境；注意双注入路径互斥（AGENTS 技术注意事项第 3/9 节）。
+
+#### 14. depends 依赖检查未做（2026-11-01 新列）
+
+**现状**：`FabricModManifest.toMirageManifest()` 把 `depends` 置 null 丢弃——依赖缺失/版本不满足的 mod
+照样进加载流程，炸在更远的调用栈上。
+
+**修复方向**：与 G9 模块 `requires` 的降级策略对齐（缺失/不满足 → WARN 跳过该 mod），并在日志列明缺哪项。
 
 ---
 
