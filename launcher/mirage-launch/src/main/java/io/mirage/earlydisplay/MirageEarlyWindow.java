@@ -425,8 +425,12 @@ public final class MirageEarlyWindow {
     private long handoff(int width, int height, CharSequence title, long monitor, long share) {
         handedOff = true;
         boolean locked = false;
+        // 性能埋点：早期窗口交接含两次「等」——renderLock（≤3s）与渲染线程终止（≤2s），
+        // 合计最多 5s。实测 S7 阶段里交接占了好几秒，必须分开量才知道等的是哪一段。
+        io.mirage.loader.MiragePerf.mark("early.handoff.begin");
         try {
             locked = renderLock.tryAcquire(3, TimeUnit.SECONDS);
+            io.mirage.loader.MiragePerf.mark("early.handoff.lock");
             if (renderTask != null) renderTask.cancel(false);
             if (scheduler != null) {
                 scheduler.shutdownNow();
@@ -436,6 +440,7 @@ public final class MirageEarlyWindow {
                     Thread.currentThread().interrupt();
                 }
             }
+            io.mirage.loader.MiragePerf.mark("early.handoff.thread");
             GLFW.glfwMakeContextCurrent(window);
             if (title != null) GLFW.glfwSetWindowTitle(window, title.toString());
             if (width > 0 && height > 0
@@ -448,6 +453,7 @@ public final class MirageEarlyWindow {
             GLFW.glfwShowWindow(window);
             MirageLog.MIRAGE.info("早期窗口已交接给 Minecraft (handle=0x"
                     + Long.toHexString(window) + ")");
+            io.mirage.loader.MiragePerf.mark("early.handoff.done");
             return window;
         } catch (Throwable t) {
             MirageLog.MIRAGE.warn("早期窗口交接失败（将回退到原版窗口创建）", t);

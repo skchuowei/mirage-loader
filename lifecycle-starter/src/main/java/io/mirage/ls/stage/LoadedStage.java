@@ -57,6 +57,7 @@ public final class LoadedStage implements Stage {
             MirageClassLoader mcl = StageSupport.get(ctx, "S3.classLoader");
 
             MirageLog.MIRAGE.info("通过 MirageClassLoader 加载 " + TARGET_MC_MAIN + " ...");
+            io.mirage.loader.MiragePerf.mark("s7.begin");
 
             // 调试：检查 classpath 能否找到 mod jar 的 assets
             try {
@@ -96,7 +97,11 @@ public final class LoadedStage implements Stage {
             // 会把早期窗口 + 已 current 的 GL 上下文交接给 MC。
             Thread.currentThread().setContextClassLoader(mcl);
             Class<?> mainClass = Class.forName(TARGET_MC_MAIN, true, mcl);
+            // 性能埋点：MC 主类启动前的 Mirage 侧开销到此为止；往后的时间全是 MC 自己的
+            // （窗口创建 / 资源重载 / TitleScreen）。TitleScreen 锚点会落在本行之后。
+            io.mirage.loader.MiragePerf.mark("s7.pre");
             mainClass.getMethod("main", String[].class).invoke(null, (Object) ctx.args());
+            io.mirage.loader.MiragePerf.mark("s7.post");
 
             // MC 主循环已结束
             MirageDebug.setStage("已加载");

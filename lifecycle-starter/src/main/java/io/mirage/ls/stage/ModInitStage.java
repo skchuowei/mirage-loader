@@ -268,7 +268,9 @@ public final class ModInitStage implements Stage {
 
             // ---- 注册表关窗：BlockState 修补 + 重新冻结（保序：mod 初始化之后）----
             window.patchBlockStates();
+            io.mirage.loader.MiragePerf.mark("s6.patch");
             window.refreeze();
+            io.mirage.loader.MiragePerf.mark("s6.close");
 
             ctx.properties().put("S6.scriptHosts", scriptHosts);
 

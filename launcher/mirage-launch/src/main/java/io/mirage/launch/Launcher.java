@@ -23,6 +23,9 @@ public final class Launcher {
     public static final String VERSION = "0.4.0";
 
     public static void main(String[] args) {
+        // 性能基线的零点：必须在任何初始化之前定下，否则 t= 的含义会随类加载时机漂移。
+        io.mirage.loader.MiragePerf.resetBaseline();
+        io.mirage.loader.MiragePerf.mark("launch");
         installLogTee(gameDirOf(args));
         banner();
         // 加载界面的像素字要 AWT 光栅化（重载期不能用 gge.text，见 ForgeStyleOverlay 注释）。

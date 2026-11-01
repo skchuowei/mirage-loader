@@ -348,6 +348,10 @@ public final class MirageDebug {
     /** 标题界面出现时由 ASM 织入的 TitleScreen.init() 调用 */
     public static void onTitleScreenShown() {
         loaded = true;
+        // 性能锚点：TitleScreen 就绪 = 用户真正能操作游戏的时刻。
+        // S7 Loaded done 只是「mod 管线结束」，MC 自身的资源重载还没走完——
+        // 没有这个锚点就答不出「点开游戏到能玩要多久」（docs/perf-baseline.md §5 的缺口 3）。
+        MiragePerf.mark("titlescreen");
     }
 
     private static volatile Method cachedFill;

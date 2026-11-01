@@ -68,6 +68,10 @@ public final class RegistryWindow {
     public static RegistryWindow open(LifecycleContext ctx) throws Exception {
         ClassLoader mcl = StageSupport.get(ctx, "S3.classLoader");
 
+        // 性能埋点：S4 是实测唯一的大头（6.8~25.9 s），阶段粒度答不出「这 7 秒花在哪」。
+        // 这里把 S4 切成 4 段打点，相邻锚点相减即各段耗时（脚本 scripts/measure_startup.ps1 解析）。
+        io.mirage.loader.MiragePerf.mark("s4.begin");
+
         // ---- 保序：拆分前 Launcher 在 Bootstrap 前先运行 SharedConstants.tryDetectVersion() ----
         // DataFixers.<clinit> 经 SharedConstants.getCurrentVersion() 读游戏版本，
         // 缺此步 ISE("Game version not set")（2026-10-25 崩溃回归：LS 迁移漏迁此调用）。
@@ -76,6 +80,7 @@ public final class RegistryWindow {
         io.mirage.loader.MirageDebug.setProgress(22);
         Class<?> sc = Class.forName("net.minecraft.SharedConstants", true, mcl);
         sc.getMethod("tryDetectVersion").invoke(null);
+        io.mirage.loader.MiragePerf.mark("s4.version");
 
         // ---- 单线程：mod 全部初始化完成后再启动 Minecraft 主类 ----
         MirageLog.MIRAGE.info("运行 Bootstrap.bootStrap() ...");
@@ -83,6 +88,9 @@ public final class RegistryWindow {
         io.mirage.loader.MirageDebug.setProgress(32);
         Class<?> bootstrap = Class.forName("net.minecraft.server.Bootstrap", true, mcl);
         bootstrap.getMethod("bootStrap").invoke(null);
+        // 注意：Bootstrap.bootStrap() 是 **MC 原版**的注册表填充与 freeze，
+        // 它的耗时是 MC 自己的成本，不是 Mirage 的开销——S4 大头很可能就在这里。
+        io.mirage.loader.MiragePerf.mark("s4.bootstrap");
 
         // M5：Bootstrap 后 registry 已 freeze，反射解冻所有 MappedRegistry，注册 Mod 内容，再冻结。
         // 之前只解冻 BLOCK/ITEM/CREATIVE_MODE_TAB，导致 entity_type/enchantment/biome 等
@@ -125,6 +133,7 @@ public final class RegistryWindow {
             }
         }
         MirageLog.MIRAGE.info("已解冻 " + allMappedRegistries.size() + " 个 MappedRegistry");
+        io.mirage.loader.MiragePerf.mark("s4.unfreeze");
 
         // 取常用的三个，给下面 special-case 用（语义不变）
         Object blockReg = builtInReg.getField("BLOCK").get(null);
@@ -146,6 +155,7 @@ public final class RegistryWindow {
         DeferredRegister.setHookListener(pendingRegisters::add);
         DeferredRegister.setNativeBackend(window::nativeRegister);
         ctx.properties().put("S4.pendingRegisters", pendingRegisters);
+        io.mirage.loader.MiragePerf.mark("s4.backend");
 
         return window;
     }
