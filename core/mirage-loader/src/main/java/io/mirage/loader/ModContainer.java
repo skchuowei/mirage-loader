@@ -43,6 +43,14 @@ public class ModContainer {
     public List<String> fabricMixinConfigs;
 
     /**
+     * fabric.mod.json "depends" 字段原始映射（key 可能含运行时键 minecraft/java/fabricloader，
+     * value 可能是 String / List / 其他 JSON 类型）。非 fabric 来源为 null。
+     * S3 发现收尾时经 {@link io.mirage.loader.depends.FabricDepends#split} 过滤，
+     * 可解析项写入 {@code manifest.depends} 供拓扑排序，缺失项 WARN。
+     */
+    public Map<String, Object> fabricDependsRaw;
+
+    /**
      * NeoForge 识别结果（id/version/mainClass/版本区间）。非 NeoForge 来源为 null。
      * MSR P2：S6 的被动捕获要把录制结果写回 `.mid-cache`，而 {@link MidCache#storePassive}
      * 需要这份元数据（缓存文件按 detected.id 定位、detected 本身也要保留）。

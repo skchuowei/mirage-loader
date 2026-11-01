@@ -67,7 +67,7 @@ AG
 - [x] fabric-api-lifecycle-v1 核心：`ServerLifecycleEvents` + `ClientLifecycleEvents`（Event/EventFactory 抽象类 + 6 个 lifecycle 事件 + `FabricLifecycleBridge` + 2 个 Mixin 接线；2026-10-25 落地，详见 `docs/Fabric兼容层缺口清单.md`）
 - [~] fabric-api-events：基础回调事件（20+ 类）——**P1-6 首切片已落地**：`ClientTickEvents` 四事件（START/END_CLIENT_TICK + START/END_LEVEL_TICK）+ 2 个 Mixin；其余回调类（AttackEntityCallback / UseBlockCallback / ServerTickEvents 等）仍缺，归 P0-2
 - [x] ~~**mod 自带 mixin config 加载（2026-11-01 新列，缺口清单 P1-13）**~~ **【已过时·2026-11-01 二次修订】** 盘点结论有误——扫描注册一直存在，真根因是注册名缺 `.json` 后缀被 Mixin 静默吞。**已修（同日）**：注册名统一完整资源路径 + 消费 `mixins` 声明字段 + 子目录支持，详见缺口清单 P1-13 修正记录
-- [~] **depends 依赖检查（2026-11-01 新列，缺口清单 P1-14）**：`toMirageManifest()` 丢弃 depends，依赖缺失的 mod 照样加载
+- [x] **depends 依赖检查（2026-11-01 新列 P1-14，同日软策略切片落地）**：`FabricDepends.split` 三桶（运行时键忽略 / 可解析进拓扑排序 / 缺失 WARN 不阻断——provides 聚合语义未建模前硬抛会误杀）；provides 解析与版本范围比较仍缺
 - [ ] fabric-api-registry：注册事件（RegistryEntryAddedCallback / FabricRegistryBuilder 桥接）
 - [x] fabric-api-network：play 阶段网络包（ServerPlayConnectionEvents / ClientPlayConnectionEvents / ServerPlayNetworking / ClientPlayNetworking / PacketSender / PayloadTypeRegistry + `FabricNetworkingBridge` + 4 个 Mixin；send 走真实 Connection；2026-10-25 P1-4 落地，已知限制见缺口清单文末汇总）
 - [x] fabric-api-resource：资源包/数据包（assets 已接；data/ 经 SERVER_DATA push 进数据包管线，2026-10-25 P1-5 落地）

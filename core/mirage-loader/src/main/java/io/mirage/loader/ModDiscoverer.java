@@ -171,6 +171,9 @@ public class ModDiscoverer {
                             eps.put("server", List.of());
                             ModContainer c = new ModContainer(m, jar, eps);
                             c.fabricMixinConfigs = fm.mixinConfigPaths();
+                            // depends 原样暂存，等 jar 循环结束后（全量 id 可见）统一 split——
+                            // 依赖目标可能在后面的 jar 里，逐 jar 检查会误报缺失
+                            c.fabricDependsRaw = fm.depends;
                             byId.put(m.id, c);
                             result.add(c);
                             MirageLog.LOADER.debug("  + 发现 (fabric) " + c
@@ -282,6 +285,39 @@ public class ModDiscoverer {
             // 以及日志里有没有 [Sandbox] 开始录制（那条在 SandboxRecorder 里）。
             MirageLog.LOADER.debug("[Sandbox] fake pass: " + fakePasses + " 次 / 跳过 "
                     + skippedPasses + " 个（理由见逐条 debug）");
+        }
+
+        // ---- Fabric depends 两阶段检查（P1-14）----
+        // 全量 id 集在此可见。可解析项进 manifest.depends 让 DependencySorter 拓扑排序生效；
+        // 缺失项 WARN 不阻断——Fabric provides 聚合语义（如 fabric-lifecycle-events-v1 由
+        // fabric-api 提供）未建模，硬抛会误杀实际能跑的 mod，等 provides 支持后再议升级硬抛。
+        if (!result.isEmpty()) {
+            java.util.Set<String> ids = new java.util.LinkedHashSet<>();
+            for (ModContainer c : result) ids.add(c.manifest.id);
+            for (ModContainer c : result) {
+                if (c.fabricDependsRaw == null || c.fabricDependsRaw.isEmpty()) continue;
+                try {
+                    io.mirage.loader.depends.FabricDepends.Split s =
+                            io.mirage.loader.depends.FabricDepends.split(c.manifest.id, c.fabricDependsRaw, ids);
+                    if (!s.resolvable.isEmpty()) {
+                        c.manifest.depends = s.resolvable;
+                        MirageLog.LOADER.debug("  · " + c.manifest.id + " 依赖(拓扑排序): "
+                                + String.join(", ", s.resolvable.keySet()));
+                    }
+                    if (!s.missing.isEmpty()) {
+                        MirageLog.LOADER.warn("! mod '" + c.manifest.id + "' 声明的依赖未找到: "
+                                + String.join(", ", s.missing)
+                                + "（Fabric provides 聚合语义未建模，若实际由聚合 jar 提供可忽略）");
+                    }
+                    if (!s.ignoredBuiltins.isEmpty()) {
+                        MirageLog.LOADER.debug("  · " + c.manifest.id + " 运行时依赖(由加载器满足): "
+                                + String.join(", ", s.ignoredBuiltins));
+                    }
+                } catch (Exception e) {
+                    // 单容器的 depends 处理失败不阻断发现流程
+                    MirageLog.LOADER.warn("mod '" + c.manifest.id + "' depends 检查异常（忽略）", e);
+                }
+            }
         }
         return result;
     }

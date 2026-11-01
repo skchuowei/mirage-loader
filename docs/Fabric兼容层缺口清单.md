@@ -158,12 +158,22 @@ Mixin 自家 logger，不进 Mirage 日志）——**mod mixin config 从初始�
 - 回归 `scripts/verify_mod_mixin_config.ps1`（15 断言 + 源码守卫 8 项 + 4 种变异检验全红）。
 **实机验证待用户双击 bat**：`logs/mirage-launch.log` 应出现 `后处理 mixin config: <mod的config>.json`。
 
-#### 14. depends 依赖检查未做（2026-11-01 新列）
+#### 14. ~~depends 依赖检查未做~~（2026-11-01 已修复，软策略切片）
 
-**现状**：`FabricModManifest.toMirageManifest()` 把 `depends` 置 null 丢弃——依赖缺失/版本不满足的 mod
+**原状**：`FabricModManifest.toMirageManifest()` 把 `depends` 置 null 丢弃——依赖缺失/版本不满足的 mod
 照样进加载流程，炸在更远的调用栈上。
 
-**修复方向**：与 G9 模块 `requires` 的降级策略对齐（缺失/不满足 → WARN 跳过该 mod），并在日志列明缺哪项。
+**已落地（2026-11-01，commit 见登记表）**：`FabricModManifest` 原样暂存 depends 到
+`ModContainer.fabricDependsRaw` → `ModDiscoverer` 发现收尾（全量 id 可见）经新纯逻辑类
+`io.mirage.loader.depends.FabricDepends.split` 切三桶：
+①运行时键（minecraft/java/fabricloader，大小写不敏感）忽略并 debug；②容器集内可解析 →
+`manifest.depends`，`DependencySorter` 拓扑排序从此对 fabric mod 生效（依赖先加载）；③容器集外 →
+WARN 指名不阻断。回归 `scripts/verify_mod_depends.ps1`（15 断言 + 7 守卫 + 4 变异）。
+
+**与原修复方向（WARN 跳过该 mod）的差异**：本切片**不跳过 mod**——因为 Fabric `provides`
+聚合语义未建模（如 `fabric-lifecycle-events-v1` 实际由 fabric-api 聚合 jar 提供），硬跳过会误杀
+实际能跑的 mod；缺失只 WARN。等 `provides` 支持后再议升级（跳过或硬抛）。
+**仍缺**：provides 解析、版本范围比较（DependencySorter 本就忽略版本，语义一致）。
 
 ---
 
