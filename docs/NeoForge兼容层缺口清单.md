@@ -1,7 +1,8 @@
 # NeoForge 兼容层缺口清单
 
 > 评估日期：2026-10-24（2026-10-24 按代码实况复核修订；2026-10-25 P0 四条全部落地；2026-10-25 P1.7 依赖拓扑排序落地；2026-10-25 P1.5 生命周期事件+ModConfig 落地；2026-10-25 P1.6 网络本地通路代码落地）
-> 结论：**P0 + P1 全部落地（P1.6 部署待并行 Fabric WIP 收敛后随 fat jar 统一出包）**，可开始小规模试跑（事件监听类 mod、多 mod 依赖包、配置型 mod、简单网络 mod）。
+~~> 结论：**P0 + P1 全部落地（P1.6 部署待并行 Fabric WIP 收敛后随 fat jar 统一出包）**，可开始小规模试跑（事件监听类 mod、多 mod 依赖包、配置型 mod、简单网络 mod）。~~
+> **【已过时·2026-11-07】** 该结论只对自建夹具（neop0test / ExpOre / testtab）成立，**从未有真实 NeoForge mod 通过验收**。真实 mod 实测见文末「2026-11-07 真实 mod 链接期实测（N0）」；链接期与加载语义缺口仍在。原文保留备查（只标不删）。
 > 本文列出大规模测试前必须补齐的能力缺口，按优先级排序。文中"已具备"均以代码为准，不采信旧文档。
 
 ---
@@ -147,3 +148,29 @@ DeferredRegister 映射了 `block_entity_type` / `menu`，但 `MenuScreens` 注�
 
 - **小规模测试通过**：3–5 个极简 NeoForge mod（只注册 item/block + 监听一个 setup 事件）从识别到注册到进游戏全流程无报错。
 - **大规模测试通过**：20+ 个真实 NeoForge mod（含游戏事件监听、资源文件、多 mod 依赖）全部正常加载。
+
+---
+
+## 2026-11-07 真实 mod 链接期实测（N0）
+
+> 工具：`scripts/verify_neo_api_surface.ps1`（读 jar 内 `.class` 常量池的 `net/neoforged/*` 引用，与 compat 实际类做差集）；基线 `docs/neo-api-surface-baseline.json`；矩阵 `docs/compat-matrix.md`。
+> 样本在 `mods-library/neoforge/`，均为 Modrinth 上 26.2 + neoforge 的真实构建，**未对代码做任何兼容性修改**。
+
+| mod | 版本 | jar | 引用 | 缺失 | 覆盖率 |
+|---|---|---|---|---|---|
+| JEI | 30.48.0.244 | `jei-26.2-neoforge-30.48.0.244.jar` | 92 | 81 | 12% |
+| Cloth Config | 26.2.155 | `cloth-config-26.2.155.jar` | 7 | 5 | 28.6% |
+| FerriteCore | 9.0.0 | `ferritecore-9.0.0-neoforge.jar` | 5 | 3 | 40% |
+
+**实测确认的、原清单未覆盖的缺口**
+
+1. **链接期类缺失**（第一道墙）：`net.neoforged.api.distmarker.Dist`、`fml.ModContainer`、`fml.ModList`、`fml.loading.FMLPaths`、`fml.loading.FMLEnvironment`、`fml.event.IModBusEvent`、`neoforge.common.NeoForge`（`EVENT_BUS`）均不存在；**整个 `net.neoforged.neoforge.client.*` 缺失**（真实 NeoForge 有 90 个 client event 类，本仓库 0 个）。JEI 的 81 个缺失里 53 个落在 `neoforge/client/*`。
+2. **主类构造签名不匹配**：真实样本 JEI 是 `(IEventBus, Dist)`；`NeoLifecycle` 只支持无参与 `(IEventBus)`。
+3. **`neoforge.mods.toml` 的 `[[mixins]]` 未解析**：FerriteCore 声明 5 个 config，当前一个都不会注册（现有收集只认 `fabric.mod.json` 声明与根目录 `*.mixin.json`，且不匹配 Neo 惯例的 `*.mixins.json`）。
+4. **Access Transformer 未应用**：JEI 与 Cloth Config 都带 `META-INF/accesstransformer.cfg`，当前只解析进 `OutputModel.accessWideners` 后无消费方。
+5. **依赖解析口径**：真实 toml 用 `type = "required"`，[NeoForgeModDetector.java](file:///d:/bing/MC/mcmoderr-my/mirage-loader/core/mirage-loader/src/main/java/io/mirage/loader/NeoForgeModDetector.java#L105-L133) 只认旧式 `mandatory = ...`。
+6. **`@EventBusSubscriber` 无扫描器**：注解类存在，静态订阅类不会被注册。
+
+**修正后的优先级**：链接期（N1）→ 加载语义（N2）→ 客户端事件子集（N3）→ 20 样本矩阵（N4）。详细任务、门禁与回滚见 `docs/plans/2026-11-07_NeoForge大规模测试前收口.md`。
+
+**边界**：常量池差集只覆盖链接期；行为兼容率（事件是否真的触发、注册是否进游戏可见）必须靠实机矩阵，不能由本表推算。
