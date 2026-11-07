@@ -98,23 +98,39 @@ public class NeoForgeModDetector {
     /**
      * 解析全部 {@code [[dependencies.<owningModId>]]} 段：
      *   - 平台依赖（neoforge / minecraft / forge / fml / java / javafml）只记录版本区间供诊断；
-     *   - mandatory 的 mod 间依赖（依赖目标 modId）写入 {@code d.depends}，供 DependencySorter 拓扑排序；
-     *   - 可选（mandatory=false）依赖不入约束表，避免缺失时误 FATAL。
+     *   - <b>required</b> 的 mod 间依赖（依赖目标 modId）写入 {@code d.depends}，供 DependencySorter 拓扑排序；
+     *   - optional 依赖不入约束表，避免缺失时误 FATAL。
      * 一个 jar 即一个 mod，所有依赖段都属于该 mod。
+     *
+     * <p><b>两种写法都要认（MSR M1，2026-11-07）</b>：
+     * <ul>
+     *   <li>真实 NeoForge mod 用 {@code type="required"} / {@code type="optional"}（JEI 30.48 的
+     *       {@code neoforge.mods.toml} 就是这种）；</li>
+     *   <li>旧式写法用 {@code mandatory=true} / {@code mandatory=false}（本项目自建夹具
+     *       {@code neop0test} 用这种）。</li>
+     * </ul>
+     * 判定规则：{@code type} 存在时以它为准；{@code type} 缺失时回退到 {@code mandatory}；
+     * 两者都缺失 ⇒ 视为 <b>required</b>（NeoForge 的默认值就是 required）。
+     *
+     * <p><b>坑（务必保留这个结构）</b>：{@code type=} 与 {@code modId=} 在段内的出现顺序不固定
+     * （真实 toml 里 {@code type} 跟在 {@code modId} 后面，但 {@code versionRange} 之后还可能跟
+     * {@code ordering}/{@code side}）。因此必须<b>先收完整段再判定</b>，不能流式地"见到 type 就定"。
      */
     private static void parseDependencies(String toml, Detected d) {
         boolean inDeps = false;
         String curModId = null;
         String curVersionRange = null;
-        boolean curMandatory = false;
+        Boolean curMandatory = null;   // 旧式 mandatory=
+        String curType = null;         // 新式 type=
         for (String raw : toml.split("\r?\n")) {
             String line = raw.trim();
             if (line.startsWith("[[")) {
-                if (inDeps) recordDep(d, curModId, curVersionRange, curMandatory);
+                if (inDeps) recordDep(d, curModId, curVersionRange, resolveMandatory(curType, curMandatory));
                 inDeps = line.startsWith("[[dependencies.");
                 curModId = null;
                 curVersionRange = null;
-                curMandatory = false;
+                curMandatory = null;
+                curType = null;
                 continue;
             }
             if (!inDeps) continue;
@@ -127,10 +143,24 @@ public class NeoForgeModDetector {
                 case "modId" -> curModId = v;
                 case "versionRange" -> curVersionRange = v;
                 case "mandatory" -> curMandatory = Boolean.parseBoolean(v);
+                case "type" -> curType = v;
                 default -> { /* ordering/side 等忽略 */ }
             }
         }
-        if (inDeps) recordDep(d, curModId, curVersionRange, curMandatory);
+        if (inDeps) recordDep(d, curModId, curVersionRange, resolveMandatory(curType, curMandatory));
+    }
+
+    /**
+     * 归一化「这条依赖是不是必需的」：
+     *   - {@code type} 优先：{@code optional} ⇒ false，其余（{@code required}）⇒ true；
+     *   - {@code type} 缺失时回退 {@code mandatory}（旧式）；
+     *   - 两者都缺失 ⇒ true（NeoForge 默认 required）。
+     */
+    private static boolean resolveMandatory(String type, Boolean mandatory) {
+        if (type != null && !type.isEmpty()) {
+            return !"optional".equalsIgnoreCase(type);
+        }
+        return mandatory == null || mandatory;
     }
 
     private static void recordDep(Detected d, String modId, String versionRange, boolean mandatory) {

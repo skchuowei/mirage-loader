@@ -1,4 +1,4 @@
-# scripts/verify_sandbox_neo.ps1
+﻿# scripts/verify_sandbox_neo.ps1
 # Verify MSR-neo sandbox recording produced recorded field in MID cache.
 # Usage: powershell -ExecutionPolicy Bypass -File .\scripts\verify_sandbox_neo.ps1
 

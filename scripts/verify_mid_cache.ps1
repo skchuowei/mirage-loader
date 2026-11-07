@@ -1,4 +1,4 @@
-# scripts/verify_mid_cache.ps1
+﻿# scripts/verify_mid_cache.ps1
 # 验证 MID 磁盘缓存是否工作。
 #
 # 用法：

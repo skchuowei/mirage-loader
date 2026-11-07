@@ -91,7 +91,15 @@ public final class SandboxRecorder {
             // 一次扫描同时得到 fake 包前缀集合与表面指纹（表面变动 → 指纹变 → 老缓存失效）
             FakeSurface surface = FakeSurface.get();
             URL[] urls = new URL[]{ jar.toUri().toURL() };
-            loader = new SandboxClassLoader(urls, SandboxRecorder.class.getClassLoader(), surface.packages);
+            // MSR M2：fake 的备用来源 = 本项目自己的 clean-room compat stub。
+            // 固定表面只有 19 个类，喂真实 mod 时 100% CNFE；复用 compat stub 后覆盖面随
+            // 链接期补齐的 stub 一起扩大（一份代码两处用，不重复维护）。
+            // kill switch：-Dmirage.msr.fakeprovider=off 退回"只用固定表面"的老行为。
+            FakeProvider provider = fakeProviderEnabled()
+                    ? new CompatFakeProvider(SandboxRecorder.class.getClassLoader())
+                    : null;
+            loader = new SandboxClassLoader(urls, SandboxRecorder.class.getClassLoader(),
+                    surface.packages, provider);
 
             // 在独立线程跑，主线程 join 超时熔断
             final SandboxClassLoader cl = loader;
@@ -125,10 +133,24 @@ public final class SandboxRecorder {
                         + "ms，已 interrupt；半成品数据不入库");
             } else if (err[0] != null) {
                 r.failed = true;
-                r.error = describe(err[0]);
-                if (err[0] instanceof SandboxKillException) {
-                    MirageLog.MIRAGE.warn("[Sandbox] " + detected.id
-                            + " 构造里请求退出进程，已拦截: " + r.error);
+                // MSR M3：失败原因三分类。原实现只把异常描述塞进 error，
+                // 事后分不清「加载器 fake 不够」「stub 能力不足」「mod 自己坏了」——
+                // 这三种的处置完全不同（补 fake / 补 stub / 找 mod 作者）。
+                String kind = classifyFailure(err[0]);
+                r.error = kind + ": " + describe(err[0]);
+                switch (kind) {
+                    case KIND_MISSING_FAKE -> MirageLog.MIRAGE.warn("[Sandbox] fake 缺口 "
+                            + detected.id + " 录制失败（缺 " + missingClassOf(err[0]) + "）: " + r.error);
+                    case KIND_STUB_INCOMPLETE -> MirageLog.MIRAGE.warn("[Sandbox] stub 不足 "
+                            + detected.id + " 录制失败: " + r.error);
+                    default -> {
+                        if (err[0] instanceof SandboxKillException) {
+                            MirageLog.MIRAGE.warn("[Sandbox] " + detected.id
+                                    + " 构造里请求退出进程，已拦截: " + r.error);
+                        } else {
+                            MirageLog.MIRAGE.warn("[Sandbox] 构造失败 " + detected.id + ": " + r.error);
+                        }
+                    }
                 }
             } else {
                 r.failed = false;
@@ -208,6 +230,89 @@ public final class SandboxRecorder {
         String msg = sb.toString();
         if (msg.length() > 500) msg = msg.substring(0, 500);
         return msg;
+    }
+
+    // ------------------------------------------------------- 失败原因分类（M3）
+
+    /** 失败分类：fake 表面缺类（加载器不够）。 */
+    public static final String KIND_MISSING_FAKE = "missing_fake";
+    /** 失败分类：compat stub 的方法/能力不足（加载器不够）。 */
+    public static final String KIND_STUB_INCOMPLETE = "stub_incomplete";
+    /** 失败分类：mod 自身构造失败（mod 的问题）。 */
+    public static final String KIND_CTOR_FAILED = "ctor_failed";
+
+    /**
+     * 把录制失败归到三类之一（MSR M3）。
+     *
+     * <p>分类依据（按优先级）：
+     * <ol>
+     *   <li>异常链里有 {@code NoClassDefFoundError} / {@code ClassNotFoundException}，
+     *       且缺失的类落在 <b>fake 覆盖域</b>（{@code net.neoforged.*} / {@code net.minecraft.*}）
+     *       ⇒ {@link #KIND_MISSING_FAKE}（fake 表面没覆盖到，补 fake 或补 stub 可解）；</li>
+     *   <li>异常链里有 {@code NoSuchMethodError} / {@code NoSuchFieldError}
+     *       ⇒ {@link #KIND_STUB_INCOMPLETE}（stub 有类但缺方法，补 stub 可解）；</li>
+     *   <li>异常链里有 {@code UnsupportedOperationException}
+     *       ⇒ {@link #KIND_STUB_INCOMPLETE}（compat 层既定原则：未知方法抛这个）；</li>
+     *   <li>其它 ⇒ {@link #KIND_CTOR_FAILED}（mod 自己的问题）。</li>
+     * </ol>
+     *
+     * <p><b>为什么要分类</b>：原实现把异常描述原样塞进 {@code error}，
+     * 事后看到 {@code NoClassDefFoundError} 分不清是「MSR 的 fake 不够」还是「mod 真坏了」，
+     * 两种的处置完全相反（补 fake vs 找 mod 作者）。
+     */
+    public static String classifyFailure(Throwable t) {
+        for (Throwable cur = t; cur != null; cur = cur.getCause()) {
+            String cn = cur.getClass().getName();
+            if (cn.equals("java.lang.NoClassDefFoundError") || cn.equals("java.lang.ClassNotFoundException")) {
+                String missing = missingClassOf(cur);
+                if (missing != null && isFakeDomain(missing)) {
+                    return KIND_MISSING_FAKE;
+                }
+                // 不在 fake 域的 CNFE 是 mod 自己的依赖缺失，不算加载器的锅
+                return KIND_CTOR_FAILED;
+            }
+            if (cn.equals("java.lang.NoSuchMethodError")
+                    || cn.equals("java.lang.NoSuchFieldError")
+                    || cn.equals("java.lang.UnsupportedOperationException")) {
+                return KIND_STUB_INCOMPLETE;
+            }
+            if (cur.getCause() == cur) break; // 自引用保护
+        }
+        return KIND_CTOR_FAILED;
+    }
+
+    /** 取出异常里缺失的类名（CNFE 的 message 形如 {@code a.b.C} 或 {@code a.b.C <- 原因}）。 */
+    public static String missingClassOf(Throwable t) {
+        for (Throwable cur = t; cur != null; cur = cur.getCause()) {
+            String cn = cur.getClass().getName();
+            if (!cn.equals("java.lang.NoClassDefFoundError")
+                    && !cn.equals("java.lang.ClassNotFoundException")) continue;
+            String m = cur.getMessage();
+            if (m == null || m.isEmpty()) return null;
+            // NoClassDefFoundError 的 message 形如 "net/x/Y" 或 "net/x/Y <- 原因"
+            int arrow = m.indexOf(" <- ");
+            String head = (arrow > 0) ? m.substring(0, arrow) : m;
+            head = head.trim().replace('/', '.');
+            // 只取第一个看起来像类名的 token
+            int sp = head.indexOf(' ');
+            if (sp > 0) head = head.substring(0, sp);
+            return head.isEmpty() ? null : head;
+        }
+        return null;
+    }
+
+    /** 该类名是否落在 fake 覆盖域（fake 表面 + compat stub 都只覆盖这两片）。 */
+    private static boolean isFakeDomain(String className) {
+        return className.startsWith("net.neoforged.") || className.startsWith("net.minecraft.");
+    }
+
+    /** kill switch：{@code -Dmirage.msr.fakeprovider=off} 退回「只用固定 fake 表面」的老行为。 */
+    private static boolean fakeProviderEnabled() {
+        try {
+            return !"off".equalsIgnoreCase(System.getProperty("mirage.msr.fakeprovider", "on"));
+        } catch (Throwable t) {
+            return true;
+        }
     }
 
     // ------------------------------------------------------------------ 全局态

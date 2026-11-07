@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # flock.ps1 - File lock coordinator (filesystem-based, no daemon)
 # State dir: .flock/ (project root, gitignored)
 #

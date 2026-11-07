@@ -45,12 +45,28 @@ public final class SandboxClassLoader extends URLClassLoader {
     /** fake 覆盖的包前缀（这些走 defineClass，其余走 parent）。 */
     private final Set<String> fakePackages;
 
+    /**
+     * fake 类的备用来源（MSR M2，2026-11-07）。可空 = 只有固定的 {@code mirage/sandbox-fake/} 表面。
+     *
+     * <p>存在的理由：固定表面只有 19 个类，喂真实 NeoForge mod 时 100% 失败
+     * （JEI 缺 81 个 {@code net/neoforged/*}）。备用来源让 fake 复用本项目自己的
+     * clean-room 兼容层 stub，见 {@link FakeProvider}。
+     */
+    private final FakeProvider fakeProvider;
+
     /** 本 loader 累计改写的调用处数（诊断用）。 */
     private int rewrittenCalls;
 
+    /** 旧构造签名保留（provider = null，只有固定 fake 表面）——既有夹具与回归脚本依赖它。 */
     public SandboxClassLoader(URL[] modJarUrls, ClassLoader parent, Set<String> fakePackages) {
+        this(modJarUrls, parent, fakePackages, null);
+    }
+
+    public SandboxClassLoader(URL[] modJarUrls, ClassLoader parent, Set<String> fakePackages,
+                              FakeProvider fakeProvider) {
         super("MirageSandbox", modJarUrls, parent);
         this.fakePackages = fakePackages;
+        this.fakeProvider = fakeProvider;
     }
 
     @Override
@@ -115,15 +131,33 @@ public final class SandboxClassLoader extends URLClassLoader {
         return false;
     }
 
+    /**
+     * 找 fake 类：两级来源（MSR M2）。
+     *
+     * <ol>
+     *   <li>固定表面资源 {@code mirage/sandbox-fake/&lt;name&gt;.class}（19 个手工枚举的类）；</li>
+     *   <li>{@link FakeProvider} 备用来源（复用 compat 层的 clean-room stub）。</li>
+     * </ol>
+     *
+     * <p>两者都没有 ⇒ 抛 CNFE（保持原消息格式，既有断言不破）。
+     * <b>顺序有意为之</b>：固定表面优先，保证手工维护的那套 fake 行为完全不变
+     * （它有 {@code Sink} 埋点，能把 API 触达写进录制结果；compat stub 没有这些埋点）。
+     */
     private Class<?> findFakeClass(String name) throws ClassNotFoundException {
         String path = FAKE_PREFIX + name.replace('.', '/') + ".class";
         URL res = getResource(path);
-        if (res == null) {
-            throw new ClassNotFoundException(
-                    "[MirageSandbox] fake 表面未覆盖: " + name + "（资源缺失 " + path + "）");
+        if (res != null) {
+            byte[] bytes = readAll(res, name);
+            return defineClass(name, bytes, 0, bytes.length);
         }
-        byte[] bytes = readAll(res, name);
-        return defineClass(name, bytes, 0, bytes.length);
+        if (fakeProvider != null) {
+            byte[] bytes = fakeProvider.findFakeBytes(name);
+            if (bytes != null && bytes.length > 0) {
+                return defineClass(name, bytes, 0, bytes.length);
+            }
+        }
+        throw new ClassNotFoundException(
+                "[MirageSandbox] fake 表面未覆盖: " + name + "（资源缺失 " + path + "）");
     }
 
     private static byte[] readAll(URL res, String name) throws ClassNotFoundException {
