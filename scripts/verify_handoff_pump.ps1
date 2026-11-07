@@ -236,8 +236,8 @@ function Check-Guards([string]$pump, [string]$early) {
         "每轮先判就绪再保活（行首锚定）"
     Assert-True ($pump -match '(?m)^\s*if \(System\.nanoTime\(\) - deadline >= 0\) return false;') `
         "超时返回 false 而不是 true（行首锚定）"
-    Assert-True ($early -match '(?m)^\s*locked = HandoffPump\.await\(800, renderLock::tryAcquire, GLFW::glfwPollEvents\);') `
-        "handoff 第一段等待走 HandoffPump + GLFW 消息泵（行首锚定）"
+    Assert-True ($early -match '(?m)^\s*boolean faded = HandoffPump\.await\(1200, \(\) -> fade != null && fade\.done\(\), GLFW::glfwPollEvents\);') `
+        "handoff 先等仪表盘淡出到纯红（HandoffPump + GLFW 消息泵，行首锚定）"
     Assert-True ($early -match '(?m)^\s*boolean terminated = HandoffPump\.await\(500, scheduler::isTerminated,') `
         "handoff 第二段等待等的是渲染线程真正退出（行首锚定）"
     Assert-True ($early -match '(?m)^\s*GLFW::glfwPollEvents\);') `
@@ -269,10 +269,10 @@ $mutations = @(
         Guard = '(?m)^\s*if \(System\.nanoTime\(\) - deadline >= 0\) return false;'
     },
     [pscustomobject]@{
-        Tag = "H3"; Desc = "第一段等待改回裸 tryAcquire(3s)（纯守卫）"; Kind = "guard"; File = "early"
-        Old = "locked = HandoffPump.await(800, renderLock::tryAcquire, GLFW::glfwPollEvents);"
-        New = "locked = renderLock.tryAcquire(3, TimeUnit.SECONDS);"
-        Guard = '(?m)^\s*locked = HandoffPump\.await\(800, renderLock::tryAcquire, GLFW::glfwPollEvents\);'
+        Tag = "H3"; Desc = "第一段等待跳过淡出（直接视为完成，纯守卫）"; Kind = "guard"; File = "early"
+        Old = "boolean faded = HandoffPump.await(1200, () -> fade != null && fade.done(), GLFW::glfwPollEvents);"
+        New = "boolean faded = true;"
+        Guard = '(?m)^\s*boolean faded = HandoffPump\.await\(1200, \(\) -> fade != null && fade\.done\(\), GLFW::glfwPollEvents\);'
     },
     [pscustomobject]@{
         Tag = "H4"; Desc = "第二段不再等渲染线程退出（纯守卫）"; Kind = "guard"; File = "early"

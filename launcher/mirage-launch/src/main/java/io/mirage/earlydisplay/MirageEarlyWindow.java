@@ -71,6 +71,8 @@ public final class MirageEarlyWindow {
 
     private volatile boolean handedOff;
     private volatile boolean crashed;
+    /** 交接淡出状态机（仪表盘 → 纯红背景）；仅渲染线程推进，handoff 线程只等它完成。 */
+    private EarlyFade fade;
     /** 渲染线程是否已绑定 GLCapabilities（LWJGL 的能力集是 ThreadLocal，见 renderTick）。 */
     private boolean renderThreadCaps;
     private int frame;
@@ -106,6 +108,9 @@ public final class MirageEarlyWindow {
                 return;
             }
             instance = w;
+            // 交接淡出：渲染线程在 handedOff 后把仪表盘溶解到纯红背景（≈500ms@20fps），
+            // 与 Minecraft 闪屏同色，硬切变溶解。
+            w.fade = new EarlyFade(500f, 20);
             w.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "Mirage-EarlyDisplay");
                 t.setDaemon(true);
@@ -280,7 +285,7 @@ public final class MirageEarlyWindow {
     }
 
     private void renderTick() {
-        if (handedOff || crashed || window == NULL) return;
+        if (crashed || window == NULL) return;
         if (!renderLock.tryAcquire()) return;
         try {
             GLFW.glfwMakeContextCurrent(window);
@@ -300,6 +305,15 @@ public final class MirageEarlyWindow {
             int w = fbWidth.get(0);
             int h = fbHeight.get(0);
             if (w > 0 && h > 0) {
+                if (handedOff && fade != null && fade.done()) {
+                    // 淡出已完成：保留最后一帧（纯红），不再重绘，但仍抽消息防「未响应」。
+                    // 直到 handoff() 停掉渲染线程为止。
+                    return;
+                }
+                if (handedOff && fade != null) {
+                    // 交接进行中：先把仪表盘溶解到纯红背景，再交还窗口句柄。
+                    fade.advance();
+                }
                 renderFrame(w, h);
                 GLFW.glfwSwapBuffers(window);
                 frame++;
@@ -347,6 +361,15 @@ public final class MirageEarlyWindow {
             drawEvents(sx, sy, v);
         }
         drawVersion(sx, sy);
+
+        // 交接淡出：在已画好的仪表盘上叠一层随 alpha 增长的背景红，直到纯红。
+        // 背景红与 Minecraft 闪屏同色，于是「满屏仪表盘 → 硬切 Logo」变成平滑溶解。
+        if (fade != null && fade.alpha() > 0.0001f) {
+            int overlay = EarlyFade.overlayColour(fade.alpha(), COLOUR_BACKGROUND);
+            gl.begin();
+            gl.quad(0f, fbW, 0f, fbH, 0f, 0f, 0f, 0f, overlay);
+            gl.draw(EarlyGl.TYPE_BAR, 0);
+        }
     }
 
     // ---- 真实进度仪表盘（与主窗口 ForgeStyleOverlay 共用 ForgeStyleLayout 常量 + LoadProgress 数据） ----
@@ -656,22 +679,27 @@ public final class MirageEarlyWindow {
 
     private long handoff(int width, int height, CharSequence title, long monitor, long share) {
         handedOff = true;
-        boolean locked = false;
-        // 性能埋点：交接含两次「等」——renderLock 与渲染线程终止，分开量才知道等的是哪一段。
+        // 性能埋点：交接含「等淡出」与「等渲染线程退出」两段，分开量才知道等的是哪一段。
         //
         // 旧实现是 tryAcquire(3s) + awaitTermination(2s) 两段纯阻塞，合计 5s；而 handedOff
         // 置位后渲染任务随即被 cancel、不再调用 glfwPollEvents()，交接线程自己又卡在阻塞里
         // 不抽窗口消息 —— 正好踩中 Windows 判定「未响应」的阈值（实机反馈：交接时卡住）。
         // 现改走 HandoffPump.await：每 10ms 由本线程（创建窗口的主线程）抽一次消息，
-        // 并把两段等待上限压到 800ms / 500ms（一帧渲染约 50ms，足够宽裕）。
+        // 并把两段等待上限压到 1200ms（淡出）/ 500ms（线程退出）。
+        //
+        // 与旧实现不同：这里先让渲染线程把仪表盘淡出到纯红（renderTick 内完成），再停渲染
+        // 线程、交还窗口。因为背景红与 Minecraft 闪屏同色，硬切就变成了溶解（用户反馈
+        // 过渡衔接生硬）。
         io.mirage.loader.MiragePerf.mark("early.handoff.begin");
         try {
-            if (renderTask != null) renderTask.cancel(false);
-            locked = HandoffPump.await(800, renderLock::tryAcquire, GLFW::glfwPollEvents);
-            io.mirage.loader.MiragePerf.mark("early.handoff.lock");
-            if (!locked) {
-                MirageLog.MIRAGE.warn("早期窗口交接：800ms 未取得 renderLock（继续交接，GL 上下文可能竞态）");
+            boolean faded = HandoffPump.await(1200, () -> fade != null && fade.done(), GLFW::glfwPollEvents);
+            io.mirage.loader.MiragePerf.mark("early.handoff.fade");
+            if (!faded) {
+                MirageLog.MIRAGE.warn("早期窗口交接：1200ms 内未完成淡出（继续交接，最后帧可能不是纯红）");
             }
+            // 淡出完成后才停渲染线程：此时窗口最后一帧已是纯红，交还 Minecraft 后由它的
+            // Mojang 闪屏覆盖，过渡自然。
+            if (renderTask != null) renderTask.cancel(false);
             if (scheduler != null) {
                 scheduler.shutdownNow();
                 boolean terminated = HandoffPump.await(500, scheduler::isTerminated,
@@ -704,8 +732,6 @@ public final class MirageEarlyWindow {
             }
             window = NULL;
             return GLFW.glfwCreateWindow(width, height, title, monitor, share);
-        } finally {
-            if (locked) renderLock.release();
         }
     }
 
