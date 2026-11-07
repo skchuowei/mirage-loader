@@ -17,7 +17,7 @@
 - **无 `src/test/` 单元测试**：当前回归依赖 `gradle build` + 启动冒烟。待建。
 - **无 Gradle Wrapper**：必须用全局 `gradle` 9.x。待补 `gradlew`。
 - **无 `scripts/run_regression.ps1`**：冒烟靠手动跑 `..\启动 26.2-mirage.bat` 看 `..\logs\latest.log`。待补自动化脚本。
-- **只支持 MC 26.2**：不向下兼容（决策 D10）。
+- **只支持 MC 26.2**：不向下兼容（决策 D10）。具体表现之一：物品渲染需要 `assets/<ns>/items/<id>.json`（物品定义层），为 1.21.3 及更早构建、只有 `models/item/*.json` 的 mod，其物品会**静默**显示紫黑占位图（无任何 WARN）。与 NeoForge 26.2 行为一致，不做资源回填（见经验台账 C70）。
 - **Mojang 官方 ProGuard 映射**：MC 升级时 Mod 需重编译（决策 D2 的代价）。
 - **早期窗口要求 GL 3.3+ core**：`MirageEarlyWindow` 依次尝试 4.6…3.3 core 创建隐藏窗口，全部失败时只打一行日志，随后 MC 自己建窗口（无早期界面）。
 - **窗口交接依赖 `Window.createGlfwWindow` 的调用点**：`MirageTransformer.transformWindow` 按 `(IILjava/lang/String;JLcom/mojang/blaze3d/systems/GpuBackend;)J` 匹配 `createGlfwWindow`，并把其中的 `GLFW.glfwCreateWindow` 替换为 `MirageEarlyWindow.createOrBorrow`；MC 升级若改签名/改调用方式会静默不交接，退化为原版窗口（早期界面直接销毁，不影响启动）。
