@@ -47,7 +47,13 @@ public final class LoadProgress {
             "发现Mod", "解析清单", "字节码变换", "合并注册表", "事件总线", "初始化Mod", "启动客户端"
     };
 
+    /** 类初始化时刻：仅作兜底，真正的时间零点由 {@link #resetBaseline(long)} 覆盖。 */
     private static final long START_NANOS = System.nanoTime();
+    /**
+     * 全局耗时基准：由 {@code MiragePerf.resetBaseline()}（Launcher.main 第一行）同步重置，
+     * 保证 UI 的 {@code t=} 与日志 {@code [LS] perf t=} 是同一把尺子（验收 D3）。
+     */
+    private static volatile long baselineNanos = START_NANOS;
     private static final Object LOCK = new Object();
     private static final Deque<Meter> METERS = new ArrayDeque<>();
     private static final Deque<Event> EVENTS = new ArrayDeque<>();
@@ -263,9 +269,29 @@ public final class LoadProgress {
         event("STAGE", "加载完成 · " + seconds(totalElapsedMs()));
     }
 
-    /** 进程启动到现在的毫秒数。 */
+    /**
+     * 同步 UI 计时基准到进程真正的起点（{@code Launcher.main} 第一行）。
+     *
+     * <p><b>为什么传参而不自己取一次 {@code System.nanoTime()}</b>：日志侧
+     * {@code MiragePerf.elapsedMillis()} 与本方法必须用<b>同一个</b> {@code now}。
+     * 各取一次虽然只差微秒，语义上仍会退化成「两把几乎一样的尺子」，而且把
+     * 「同一把尺子」变成靠调用顺序维持的隐式约定。验收 D3 要求 UI 的 {@code t}
+     * 与 {@code [LS] perf t=} 可直接相减对账，所以这里只接受调用方给的值。
+     *
+     * <p>同时把阶段秒表零点一起挪到 {@code now}：{@code resetBaseline} 发生在任何
+     * {@code stage()} 之前，不挪的话首个 {@code view()} 会把「类加载到 Launcher 入口」
+     * 这段也算进 S1 耗时。
+     */
+    public static void resetBaseline(long nowNanos) {
+        synchronized (LOCK) {
+            baselineNanos = nowNanos;
+            stageStartNanos = nowNanos;
+        }
+    }
+
+    /** 进程真正起点到现在的毫秒数（与 {@code [LS] perf t=} 同基准）。 */
     public static long totalElapsedMs() {
-        return (System.nanoTime() - START_NANOS) / 1_000_000L;
+        return (System.nanoTime() - baselineNanos) / 1_000_000L;
     }
 
     /** 当前阶段已用毫秒数。 */

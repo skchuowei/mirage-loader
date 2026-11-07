@@ -42,9 +42,19 @@ public final class MiragePerf {
     /**
      * 重置计时基准。必须在进程真正的起点调用（本项目是 {@code Launcher.main} 的第一行），
      * 否则 {@code t=} 的含义会随类加载时机漂移。
+     *
+     * <p>本方法是<b>全进程唯一的时间零点</b>：同一个 {@code now} 也会传给
+     * {@link LoadProgress#resetBaseline(long)}，让加载界面的秒表与这里的 {@code [LS] perf t=}
+     * 用同一把尺子（验收 D3）。新增别的计时基准时必须从这里取值，不要另起一次
+     * {@code System.nanoTime()}。
      */
     public static void resetBaseline() {
-        baselineNanos = System.nanoTime();
+        long now = System.nanoTime();
+        baselineNanos = now;
+        // 同一个 now 同步给 UI：否则 LoadProgress 的 t= 从「类初始化」起算，
+        // 本类的 t= 从「Launcher.main 第一行」起算，两者差一个类加载时机，
+        // 验收 D3 的「UI 耗时与日志可对账」就不成立。两处只取一次 nanoTime。
+        LoadProgress.resetBaseline(now);
     }
 
     /** 距基准的毫秒数。 */

@@ -11,14 +11,20 @@
 #   计数器的边界语义。这些全是纯逻辑，放进 LoadProgress 后就能离线钉住，不必重写一遍算法。
 #
 #   脚本把生产源码（或它的一个变异副本）与检查程序一起 javac 编译，跑出固定格式的 STAT 行，
-#   在 PowerShell 侧断言。原版必须全绿；随后自动做 4 种变异（改坏生产源码的一个点），
-#   每种都必须让断言变红 —— 否则说明用例是空转（经验 C36/A7）。
+#   在 PowerShell 侧断言。原版必须全绿；随后自动做 6 种源码变异 + 2 种守卫变异
+#   （改坏生产源码的一个点），每种都必须让断言变红 —— 否则说明用例是空转（经验 C36/A7）。
 #
-# 4 种变异：
+# 6 种源码变异：
 #   M1 snapshot 里 steps==0 改成 steps==-1       → 不定条全变确定条
 #   M2 snapshot 的 Math.min(max,size) 改成 size  → 无视 max，渲染出超过 2 根条
 #   M3 EVENT_CAPACITY 32 改成 33                 → 事件环容量失守
 #   M4 CURSOR_FRACTION 0.2f 改成 1.2f            → 游标宽过整条
+#   M5 totalElapsedMs 回退到 START_NANOS         → 基准重置失效（D3）
+#   M6 resetBaseline 忘了同步阶段秒表             → S1 秒表把类加载时间算进去（D3）
+#
+# 2 种守卫变异（改 MiragePerf.java 文本，验源码守卫不是摆设）：
+#   G1 删掉 LoadProgress.resetBaseline(now)      → 两把尺子不再同步
+#   G2 改成另取一次 nanoTime                     → 「同一个 now」约定失守
 
 [CmdletBinding()]
 param(
@@ -33,9 +39,11 @@ $src = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\LoadPr
 $overlaySrc = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\ForgeStyleOverlay.java"
 $layoutSrc = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\ForgeStyleLayout.java"
 $earlySrc = Join-Path $root "launcher\mirage-launch\src\main\java\io\mirage\earlydisplay\MirageEarlyWindow.java"
+$perfSrc = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\MiragePerf.java"
+$launcherSrc = Join-Path $root "launcher\mirage-launch\src\main\java\io\mirage\launch\Launcher.java"
 $stageDir = Join-Path $root "lifecycle-starter\src\main\java\io\mirage\ls\stage"
 
-foreach ($f in @($src, $overlaySrc, $layoutSrc, $earlySrc)) {
+foreach ($f in @($src, $overlaySrc, $layoutSrc, $earlySrc, $perfSrc, $launcherSrc)) {
     if (-not (Test-Path $f)) {
         Write-Host "[FAIL] 找不到源码: $f" -ForegroundColor Red
         exit 1
@@ -194,6 +202,18 @@ public final class LoadProgressCheck {
                 + LoadProgress.channelOf("[Mirage-Mixin] x") + ","
                 + LoadProgress.channelOf("[MG-ERROR] x") + "," + LoadProgress.channelOf("plain"));
 
+        // ---- 计时基准（D3）：重置后 t 归零，UI 秒表与日志同一把尺 ----
+        try { Thread.sleep(160); } catch (InterruptedException ignored) { }
+        long elapsedBefore = LoadProgress.totalElapsedMs();
+        long stageBefore = LoadProgress.stageElapsedMs();
+        LoadProgress.resetBaseline(System.nanoTime());
+        System.out.println("STAT baseline.before=" + elapsedBefore);
+        System.out.println("STAT baseline.stageBefore=" + stageBefore);
+        System.out.println("STAT baseline.after=" + LoadProgress.totalElapsedMs());
+        System.out.println("STAT baseline.viewT=" + LoadProgress.view(3, 4).elapsedMs());
+        System.out.println("STAT baseline.stageAfter=" + LoadProgress.stageElapsedMs());
+        System.out.println("STAT baseline.c2=" + LoadProgress.view(3, 4).counter2());
+
         // ---- finish：收掉长驻 meter，主条填满 ----
         LoadProgress.finish();
         System.out.println("STAT finish.meters=" + LoadProgress.snapshot(10).size());
@@ -306,6 +326,12 @@ function Run-Suite([string]$lpPath, [string]$tag, [bool]$report) {
     Assert-True ((Stat "text.meterhead") -eq "blackbox") "meterHead 只含任务名（左对齐）" $report
     Assert-True ((Stat "text.metertail") -match "s") "meterTail 含秒表（右对齐）" $report
     Assert-True ((Stat "text.channel") -eq "LS,MIXIN,ERROR,MC") "通道判定覆盖 LS/Mixin/ERROR/原版" $report
+    Assert-True ((Num (Stat "baseline.before")) -ge 100) "重置前总耗时已走过 >=100ms（用例真的等过）" $report
+    Assert-True ((Num (Stat "baseline.stageBefore")) -ge 100) "重置前阶段秒表也在走" $report
+    Assert-True ((Num (Stat "baseline.after")) -le 20) "resetBaseline 后总耗时归零（与日志同基准）" $report
+    Assert-True ((Num (Stat "baseline.viewT")) -le 20) "view().elapsedMs 同样归零" $report
+    Assert-True ((Num (Stat "baseline.stageAfter")) -le 20) "resetBaseline 同时重置阶段秒表" $report
+    Assert-True ((Stat "baseline.c2") -match "t 0\.0s") "计数行 t 也用重置后的基准" $report
     Assert-True ((Stat "finish.meters") -eq "0") "finish() 收掉所有长驻 meter" $report
     Assert-True ((Stat "finish.segs") -eq "1.0,1.0,1.0") "finish() 后主条 7 段全满" $report
     Assert-True ((Stat "finish.flag") -eq "true") "finish() 幂等标志" $report
@@ -315,33 +341,48 @@ function Run-Suite([string]$lpPath, [string]$tag, [bool]$report) {
 
 # ---------------------------------------------------------------- 源码守卫（只在原版跑）
 
-function Check-SourceGuards {
+function Check-SourceGuards([string]$perfOverride, [bool]$report) {
+    $script:checks = 0
+    $script:failures = New-Object System.Collections.Generic.List[string]
     $overlay = Get-Content $overlaySrc -Raw -Encoding UTF8
     $early = Get-Content $earlySrc -Raw -Encoding UTF8
     $layout = Get-Content $layoutSrc -Raw -Encoding UTF8
+    $lp = Get-Content $src -Raw -Encoding UTF8
+    $perf = if ($perfOverride) { $perfOverride } else { Get-Content $perfSrc -Raw -Encoding UTF8 }
+    $launcher = Get-Content $launcherSrc -Raw -Encoding UTF8
     $stages = Get-ChildItem (Join-Path $stageDir "*.java") | ForEach-Object {
         Get-Content $_.FullName -Raw -Encoding UTF8
     }
     $stageText = ($stages -join "`n")
-    Assert-True ($overlay -match "LoadProgress\.view\(") "主窗口从 LoadProgress 取数据" $true
-    Assert-True ($early -match "LoadProgress\.view\(") "早期窗口从同一份 LoadProgress 取数据" $true
-    Assert-True ($overlay -match "OLD_STEPPER") "主窗口保留旧形态回滚开关" $true
-    Assert-True ($early -match "OLD_STEPPER") "早期窗口保留旧形态回滚开关" $true
-    Assert-True ($overlay -match "cursorLeft\(" -and $early -match "cursorLeft\(") "两窗口都画不定游标" $true
-    Assert-True ($layout -match "EVENT_VISIBLE_LINES = 4") "事件流 4 行（5 行会出血到 496）" $true
-    Assert-True ($stageText -match "LoadProgress\.begin\(") "阶段埋点接了真实 meter" $true
-    Assert-True ($overlay -match "v\.segments\(\)") "分段总条取 LoadProgress.segments() 而非手写常量" $true
-    Assert-True ($stageText -match "bootStrap") "S4 黑盒区间仍在（不定条覆盖它）" $true
+    Assert-True ($overlay -match "LoadProgress\.view\(") "主窗口从 LoadProgress 取数据" $report
+    Assert-True ($early -match "LoadProgress\.view\(") "早期窗口从同一份 LoadProgress 取数据" $report
+    Assert-True ($overlay -match "OLD_STEPPER") "主窗口保留旧形态回滚开关" $report
+    Assert-True ($early -match "OLD_STEPPER") "早期窗口保留旧形态回滚开关" $report
+    Assert-True ($overlay -match "cursorLeft\(" -and $early -match "cursorLeft\(") "两窗口都画不定游标" $report
+    Assert-True ($layout -match "EVENT_VISIBLE_LINES = 4") "事件流 4 行（5 行会出血到 496）" $report
+    Assert-True ($stageText -match "LoadProgress\.begin\(") "阶段埋点接了真实 meter" $report
+    Assert-True ($overlay -match "v\.segments\(\)") "分段总条取 LoadProgress.segments() 而非手写常量" $report
+    Assert-True ($stageText -match "bootStrap") "S4 黑盒区间仍在（不定条覆盖它）" $report
+    # D3：UI 与 [LS] perf 必须是同一把尺子（行为断言在 Run-Suite，这里钉住接线不丢）
+    Assert-True ($lp -match "System\.nanoTime\(\) - baselineNanos") "总耗时取可重置基准而非类初始化时刻" $report
+    Assert-True ($lp -match "stageStartNanos = nowNanos;") "重置基准时同步阶段秒表零点" $report
+    Assert-True ($perf -match "long now = System\.nanoTime\(\);") "基准只取一次 nanoTime" $report
+    # 行首锚定：注释掉的代码（"// LoadProgress.resetBaseline(now);"）不能算接线还在
+    Assert-True ($perf -match "(?m)^\s*LoadProgress\.resetBaseline\(now\);") "MiragePerf 把同一个 now 同步给 LoadProgress（非注释）" $report
+    Assert-True ($launcher -match "MiragePerf\.resetBaseline\(\);") "Launcher.main 仍从进程起点调重置" $report
+    return $script:failures.Count
 }
 
 # ---------------------------------------------------------------- 原版 + 变异
 
 Write-Host "== 原版 LoadProgress：编译 + 断言 ==" -ForegroundColor Cyan
-$baseFails = Run-Suite $src "base" $true
+$runFails = Run-Suite $src "base" $true
+$runChecks = $script:checks
 Write-Host "== 源码守卫 ==" -ForegroundColor Cyan
-Check-SourceGuards
-$baseFails = $script:failures.Count
-Write-Host "   原版断言：$($script:checks) 条，失败 $baseFails 条" -ForegroundColor $(if ($baseFails -eq 0) { "Green" } else { "Red" })
+$guardFails = Check-SourceGuards $null $true
+$guardChecks = $script:checks
+$baseFails = $runFails + $guardFails
+Write-Host "   原版断言：$($runChecks + $guardChecks) 条（行为 $runChecks / 守卫 $guardChecks），失败 $baseFails 条" -ForegroundColor $(if ($baseFails -eq 0) { "Green" } else { "Red" })
 
 $mutations = @(
     [pscustomobject]@{
@@ -363,6 +404,30 @@ $mutations = @(
         Name = "M4-cursor-width"
         Old  = "public static final float CURSOR_FRACTION = 0.2f;"
         New  = "public static final float CURSOR_FRACTION = 1.2f;"
+    },
+    [pscustomobject]@{
+        Name = "M5-baseline-frozen"
+        Old  = "return (System.nanoTime() - baselineNanos) / 1_000_000L;"
+        New  = "return (System.nanoTime() - START_NANOS) / 1_000_000L;"
+    },
+    [pscustomobject]@{
+        Name = "M6-stage-clock-not-reset"
+        Old  = "stageStartNanos = nowNanos;"
+        New  = "// stageStartNanos = nowNanos;"
+    }
+)
+
+# 守卫变异：只改 MiragePerf.java 的文本，编译产物不变，专门验「源码守卫不是摆设」
+$guardMutations = @(
+    [pscustomobject]@{
+        Name = "G1-no-sync"
+        Old  = "LoadProgress.resetBaseline(now);"
+        New  = "// LoadProgress.resetBaseline(now);"
+    },
+    [pscustomobject]@{
+        Name = "G2-second-nanotime"
+        Old  = "LoadProgress.resetBaseline(now);"
+        New  = "LoadProgress.resetBaseline(System.nanoTime());"
     }
 )
 
@@ -389,6 +454,22 @@ foreach ($m in $mutations) {
     }
 }
 
+$originalPerf = [System.IO.File]::ReadAllText($perfSrc)
+foreach ($m in $guardMutations) {
+    if (-not $originalPerf.Contains($m.Old)) {
+        $script:mutationFails.Add("$($m.Name)：MiragePerf 里找不到变异锚点，用例已失效")
+        Write-Host "   [FAIL] $($m.Name)：变异锚点不存在" -ForegroundColor Red
+        continue
+    }
+    $red = Check-SourceGuards $originalPerf.Replace($m.Old, $m.New) $false
+    if ($red -ge 1) {
+        Write-Host "   [OK]   $($m.Name) 被抓到（$red 条守卫变红）" -ForegroundColor DarkGreen
+    } else {
+        $script:mutationFails.Add("$($m.Name) 改坏后守卫仍全绿 = 守卫空转")
+        Write-Host "   [FAIL] $($m.Name) 改坏后守卫仍全绿" -ForegroundColor Red
+    }
+}
+
 if (-not $Keep) {
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 } else {
@@ -397,7 +478,7 @@ if (-not $Keep) {
 
 Write-Host ""
 if ($baseFails -eq 0 -and $script:mutationFails.Count -eq 0) {
-    Write-Host "全部通过：原版断言全绿 + $($mutations.Count) 种变异全红" -ForegroundColor Green
+    Write-Host "全部通过：原版断言全绿 + $($mutations.Count) 种源码变异 + $($guardMutations.Count) 种守卫变异全红" -ForegroundColor Green
     exit 0
 }
 Write-Host "失败：原版 $baseFails 条 / 变异 $($script:mutationFails.Count) 项" -ForegroundColor Red
