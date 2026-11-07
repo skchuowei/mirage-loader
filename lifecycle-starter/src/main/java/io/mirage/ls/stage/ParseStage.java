@@ -5,6 +5,7 @@ import io.mirage.api.log.MirageLog;
 import io.mirage.api.Mirage;
 import io.mirage.eventbus.EventBus;
 import io.mirage.eventbus.EventBusHandleImpl;
+import io.mirage.loader.GameDirs;
 import io.mirage.loader.ModContainer;
 import io.mirage.loader.runtime.MirageProviderImpl;
 import io.mirage.ls.LifecycleContext;
@@ -61,7 +62,8 @@ public final class ParseStage implements Stage {
                     ctx.dist(), ctx.gameDir(), mods, busHandle, LifecycleStarter.VERSION);
             Mirage.bootstrap(provider);
             // P1.5：设置 NeoForge 配置目录 <gameDir>/config，供 ModLoadingContext 读取 .toml
-            net.neoforged.fml.ModLoadingContext.setConfigDirectory(ctx.gameDir().resolve("config"));
+            // 目录名走 GameDirs 单一来源（S6 预建目录用的是同一个常量，避免两处漂移）
+            net.neoforged.fml.ModLoadingContext.setConfigDirectory(GameDirs.configDir(ctx.gameDir()));
             MirageLog.MIRAGE.info("公共 API 门面已就绪 (loader v" + LifecycleStarter.VERSION
                     + ", mods=" + mods.size() + ", dist=" + ctx.dist() + ")");
 

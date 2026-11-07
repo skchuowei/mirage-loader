@@ -10,6 +10,7 @@ import io.mirage.api.log.MirageLog;
 import io.mirage.api.registry.DeferredRegister;
 import io.mirage.api.version.VersionMasks;
 import io.mirage.eventbus.EventBus;
+import io.mirage.loader.GameDirs;
 import io.mirage.loader.MidCache;
 import io.mirage.loader.ModContainer;
 import io.mirage.loader.MirageClassLoader;
@@ -43,6 +44,9 @@ import java.util.List;
  * <p>MG-Lifecycle S6 要求严格串行（构造顺序即加载图顺序）；调度器串行执行天然满足。
  * S2 按 ParseFailPolicy 判定的跳过集合在此生效（{@code ctx.skippedMods()}）。
  *
+ * <p>本阶段开跑第一件事是预建 {@code <gameDir>/config}（已知 bug #4）：NeoForge 的语义是
+ * 配置目录在 mod 构造前就存在，否则「构造里直接写 config/xxx.toml」的 mod 会退化。
+ *
  * <p><b>日志</b>：单个 mod 失败不再是一行「初始化失败: 类名」就完事——改造前
  * {@code + t} 只有 {@code toString()}，{@code ClassNotFoundException} 看不出是谁在找哪个类、
  * {@code InvocationTargetException} 更是连 cause 都没有。现在每个失败都经
@@ -68,6 +72,13 @@ public final class ModInitStage implements Stage {
     public StageOutcome execute(LifecycleContext ctx) {
         return StageSupport.guard(() -> {
             MirageDebug.setPhase(5);
+
+            // ---- 已知 bug #4：config 目录必须先于 mod 构造就绪 ----
+            // NeoForge 语义：<gameDir>/config 在 mod 构造函数跑之前就存在——ExpOre 之类
+            // 直接在构造里写 "config/xxx.toml"，缺目录就抛 FileNotFoundException、退化为
+            // 默认配置。这里必须在下面的 mod 循环之前补上。
+            ensureConfigDir(ctx);
+
             List<ModContainer> mods = StageSupport.get(ctx, "S1.mods");
             EventBus eventBus = StageSupport.get(ctx, "S2.eventBus");
             MirageClassLoader mcl = StageSupport.get(ctx, "S3.classLoader");
@@ -298,6 +309,24 @@ public final class ModInitStage implements Stage {
                         + String.join("; ", failures));
             }
         });
+    }
+
+    /**
+     * 已知 bug #4：在 mod 构造之前把 {@code <gameDir>/config} 建好。
+     *
+     * <p>失败只 WARN，不 FATAL——修复前的现实是「目录缺失 ⇒ mod 配置写不下 ⇒ 退化默认值继续跑」，
+     * 这里不能因为建目录失败（权限、只读盘、config 被同名文件占用）把整个启动升级成致命错误。
+     * NeoForge 那边会更严格，但本项目的取舍是"能起床就别躺下"（见 `docs/已知bug.md` #4）。
+     *
+     * <p>纯路径逻辑在 {@link GameDirs}，可被 {@code scripts/verify_config_dir.ps1} 离线验证。
+     */
+    private static void ensureConfigDir(LifecycleContext ctx) {
+        try {
+            MirageLog.MIRAGE.debug("配置目录已就绪: " + GameDirs.ensureConfigDir(ctx.gameDir()));
+        } catch (Throwable t) {
+            MirageLog.MIRAGE.warn("创建配置目录失败（mod 写配置可能退化为默认值，游戏继续）: "
+                    + GameDirs.configDir(ctx.gameDir()), t);
+        }
     }
 
     /**
