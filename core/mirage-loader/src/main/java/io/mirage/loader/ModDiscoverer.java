@@ -66,6 +66,9 @@ public class ModDiscoverer {
         // MSR P2 统计：本轮跑了几个 fake pass / 因何跳过（末尾一行汇总，见下）
         int fakePasses = 0;
         int skippedPasses = 0;
+        // S1 的真实分母 = 候选 jar/脚本目录数；每处理完一个候选 +1（不是编出来的百分比）。
+        // 循环里多处 continue，所以计步放在迭代开头，任何分支都覆盖得到。
+        LoadProgress.Meter scanMeter = null;
         try (var stream = Files.list(modsDir)) {
             // 目录形态的脚本 mod：`mods/<name>/mod.mirage.json`（含 scripts/*.mgs）。
             // 只认「目录里确实有描述符」的目录，避免把用户的备份夹/截图夹当成 mod。
@@ -75,8 +78,12 @@ public class ModDiscoverer {
             long dirCount = jars.stream().filter(Files::isDirectory).count();
             MirageLog.LOADER.info("扫描 " + (jars.size() - dirCount) + " 个 jar，"
                     + dirCount + " 个脚本目录，目录: " + modsDir);
+            scanMeter = LoadProgress.begin("扫描 mod 候选", jars.size());
+            LoadProgress.counter("mods.candidates", jars.size());
 
+            int scanIdx = 0;
             for (Path jar : jars) {
+                LoadProgress.set(scanMeter, ++scanIdx);
                 if (Files.isDirectory(jar)) {
                     // 变量名沿用 jar（避免整段重命名），此处它实际是 mod 根目录
                     ModContainer c = discoverScriptDir(jar);
@@ -279,6 +286,8 @@ public class ModDiscoverer {
                     MirageLog.LOADER.debug("! " + jar.getFileName() + " 没有 mod 描述符，跳过");
                 }
             }
+        } finally {
+            LoadProgress.end(scanMeter);
         }
         if (fakePasses > 0 || skippedPasses > 0) {
             // 一行汇总：验收「首启零 fake pass」看的就是这里的 fakePasses 是否为 0，

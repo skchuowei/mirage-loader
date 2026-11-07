@@ -90,6 +90,18 @@ public final class ForgeStyleOverlay {
     private static final long TEXT_SNAPSHOT_MS = 250L;
 
     /**
+     * 回滚开关：{@code -Dmirage.ui.oldStepper=true} 恢复 81ead56 的「S1–S7 步骤条 + 单条假百分比」界面。
+     * 默认走新仪表盘。旧分支同时被 {@code scripts/verify_forgestyle_text.ps1} 用来验证旧形态没被打破。
+     */
+    private static final boolean OLD_STEPPER = Boolean.getBoolean("mirage.ui.oldStepper");
+    /** 进度仪表盘的文本快照间隔：秒表 0.1s 一变，200ms 一采足够。 */
+    private static final long VIEW_SNAPSHOT_MS = 200L;
+    /** 不定进度动画的帧计数（与主窗口 draw 同频）。 */
+    private static final AtomicInteger FRAME = new AtomicInteger();
+    private static volatile LoadProgress.View uiView;
+    private static volatile long uiViewAt;
+
+    /**
      * 字符字形缓存：key = 字号 + '\u0000' + 字符；
      * value = {@code [advance, glyphW, glyphH, (x,y,w,h)×n]}，矩形相对字符自身原点。
      * 全部在 {@link #prewarm()} 里一次性用 AWT 光栅化（启动早期、主线程），
@@ -222,11 +234,187 @@ public final class ForgeStyleOverlay {
                 pack(alpha, ForgeStyleLayout.FORGE_RED)));
         step("内存条", () -> drawMemoryBar(gge, fill, sx, sy, alpha));
         step("内存文字", () -> drawMemoryText(gge, fill, sx, sy, alpha));
-        step("总进度条", () -> drawTotalProgress(gge, fill, sx, sy, alpha));
-        step("阶段摘要", () -> drawStageSummary(gge, fill, sx, sy, alpha));
-        step("阶段步骤条", () -> drawStageStepper(gge, fill, sx, sy, alpha));
-        step("日志面板", () -> drawLogPanel(gge, fill, sx, sy, alpha));
+        if (OLD_STEPPER) {
+            step("总进度条", () -> drawTotalProgress(gge, fill, sx, sy, alpha));
+            step("阶段摘要", () -> drawStageSummary(gge, fill, sx, sy, alpha));
+            step("阶段步骤条", () -> drawStageStepper(gge, fill, sx, sy, alpha));
+            step("日志面板", () -> drawLogPanel(gge, fill, sx, sy, alpha));
+        } else {
+            drawDashboard(gge, fill, sx, sy, alpha, FRAME.getAndIncrement());
+        }
         step("版本号", () -> drawVersion(gge, fill, sx, sy, alpha));
+    }
+
+    // ---- 真实进度仪表盘：分段总条 + 独立 meter + 计数 + 事件流 ----
+    //
+    // 数据全部来自 LoadProgress（meter 栈 / 真实计数器 / 事件环），这里只做「按设计坐标画矩形」。
+    // 文本快照 200ms 一采；游标每帧动，所以 S4/S7 这种拿不到分母的黑盒区间屏幕上不会静止。
+
+    private static void drawDashboard(Object gge, Method fill, float sx, float sy,
+                                      int alpha, int frame) {
+        LoadProgress.View v = view();
+        step("分段总进度", () -> drawSegmentedTotal(gge, fill, sx, sy, alpha, v, frame));
+        step("面包屑", () -> drawBreadcrumb(gge, fill, sx, sy, alpha, v));
+        step("独立进度条", () -> drawMeters(gge, fill, sx, sy, alpha, v, frame));
+        step("计数行", () -> drawCounters(gge, fill, sx, sy, alpha, v));
+        step("事件流", () -> drawEvents(gge, fill, sx, sy, alpha, v));
+    }
+
+    private static LoadProgress.View view() {
+        long now = System.currentTimeMillis();
+        LoadProgress.View v = uiView;
+        if (v == null || now - uiViewAt >= VIEW_SNAPSHOT_MS) {
+            v = LoadProgress.view(ForgeStyleLayout.METER_COUNT, ForgeStyleLayout.EVENT_VISIBLE_LINES);
+            uiView = v;
+            uiViewAt = now;
+        }
+        return v;
+    }
+
+    /** 7 段等宽分段条：已完成段填绿、当前段填真实比例或不定游标、未开始段留空。 */
+    private static void drawSegmentedTotal(Object gge, Method fill, float sx, float sy,
+                                           int alpha, LoadProgress.View v, int frame) {
+        int top = ForgeStyleLayout.TOTAL_BAR_TOP;
+        int bottom = top + ForgeStyleLayout.TOTAL_BAR_HEIGHT;
+        int x0 = gx(ForgeStyleLayout.barLeft(), sx);
+        int x1 = gx(ForgeStyleLayout.barOuterRight(), sx);
+        MirageDebug.fillRect(gge, fill, x0, gy(top, sy), x1, gy(bottom, sy),
+                pack(alpha, ForgeStyleLayout.COLOUR_ACTIVE));
+        MirageDebug.fillRect(gge, fill, gx(ForgeStyleLayout.barInnerLeft(), sx),
+                gy(top + ForgeStyleLayout.INNER_INSET, sy),
+                gx(ForgeStyleLayout.barInnerRight(), sx),
+                gy(bottom - ForgeStyleLayout.INNER_INSET, sy),
+                pack(alpha, ForgeStyleLayout.FORGE_RED));
+
+        float[] segs = v.segments();
+        int yTop = gy(top + ForgeStyleLayout.FILL_INSET, sy);
+        int yBot = gy(bottom - ForgeStyleLayout.FILL_INSET, sy);
+        int stage = LoadProgress.stageIndex();
+        for (int i = 0; i < ForgeStyleLayout.STAGE_COUNT; i++) {
+            int sx0 = gx(ForgeStyleLayout.segmentLeft(i) + 2, sx);
+            int sx1 = gx(ForgeStyleLayout.segmentRight(i) - 2, sx);
+            if (sx1 <= sx0) continue;
+            float f = segs[i];
+            int colour = i < stage ? ForgeStyleLayout.COLOUR_OK : ForgeStyleLayout.COLOUR_ACTIVE;
+            if (f > 0f) {
+                int right = Math.round(sx0 + (sx1 - sx0) * Math.min(1f, f));
+                MirageDebug.fillRect(gge, fill, sx0, yTop, right, yBot, pack(alpha, colour));
+            } else if (f < 0f) {
+                int w = Math.round((sx1 - sx0) * LoadProgress.CURSOR_FRACTION);
+                int left = Math.round(sx0 + (sx1 - sx0 - w) * (LoadProgress.cursorLeft(frame)
+                        / (1f - LoadProgress.CURSOR_FRACTION)));
+                MirageDebug.fillRect(gge, fill, left, yTop, left + w, yBot,
+                        pack(alpha, ForgeStyleLayout.COLOUR_ACTIVE));
+            }
+            // 段间 1px 分隔（红底竖线），让「7 格」看得出来
+            if (i > 0) {
+                int sep = gx(ForgeStyleLayout.segmentLeft(i), sx);
+                MirageDebug.fillRect(gge, fill, sep, gy(top + 1, sy),
+                        Math.max(sep + 1, sep + Math.round(sx)), gy(bottom - 1, sy),
+                        pack(alpha, ForgeStyleLayout.FORGE_RED));
+            }
+        }
+        drawText(gge, fill, truncate(v.totalLabel(), gx(ForgeStyleLayout.BAR_WIDTH, sx), sx),
+                gx(ForgeStyleLayout.barLeft(), sx), gy(ForgeStyleLayout.totalTextY(), sy), sx,
+                pack(alpha, ForgeStyleLayout.COLOUR_ACTIVE));
+    }
+
+    private static void drawBreadcrumb(Object gge, Method fill, float sx, float sy,
+                                       int alpha, LoadProgress.View v) {
+        MirageDebug.fillRect(gge, fill, gx(ForgeStyleLayout.barLeft(), sx),
+                gy(ForgeStyleLayout.DIVIDER_1_TOP, sy),
+                gx(ForgeStyleLayout.barOuterRight(), sx),
+                gy(ForgeStyleLayout.DIVIDER_1_TOP + 1, sy),
+                pack(alpha, ForgeStyleLayout.COLOUR_LINE));
+        drawText(gge, fill, v.breadcrumb(), gx(ForgeStyleLayout.barLeft(), sx),
+                gy(ForgeStyleLayout.breadcrumbY(), sy), sx, pack(alpha, ForgeStyleLayout.COLOUR_DIM));
+    }
+
+    /** 最多 3 根彼此独立的 meter：确定条填真实比例，不定条画来回滑动的游标。 */
+    private static void drawMeters(Object gge, Method fill, float sx, float sy,
+                                   int alpha, LoadProgress.View v, int frame) {
+        java.util.List<LoadProgress.Snapshot> meters = v.meters();
+        for (int i = 0; i < ForgeStyleLayout.METER_COUNT; i++) {
+            int top = ForgeStyleLayout.meterBarTop(i);
+            int bottom = top + ForgeStyleLayout.METER_BAR_HEIGHT;
+            int x0 = gx(ForgeStyleLayout.barLeft(), sx);
+            int x1 = gx(ForgeStyleLayout.barOuterRight(), sx);
+            // 空槽也画外框/内衬：屏幕上始终能看出「这里有几根独立条」
+            MirageDebug.fillRect(gge, fill, x0, gy(top, sy), x1, gy(bottom, sy),
+                    pack(alpha, ForgeStyleLayout.COLOUR_ACTIVE));
+            MirageDebug.fillRect(gge, fill, gx(ForgeStyleLayout.barInnerLeft(), sx),
+                    gy(top + ForgeStyleLayout.INNER_INSET, sy),
+                    gx(ForgeStyleLayout.barInnerRight(), sx),
+                    gy(bottom - ForgeStyleLayout.INNER_INSET, sy),
+                    pack(alpha, ForgeStyleLayout.FORGE_RED));
+            if (i >= meters.size()) continue;
+            LoadProgress.Snapshot s = meters.get(i);
+            int yTop = gy(top + ForgeStyleLayout.FILL_INSET, sy);
+            int yBot = gy(bottom - ForgeStyleLayout.FILL_INSET, sy);
+            if (s.indeterminate()) {
+                int fx0 = gx(ForgeStyleLayout.barFillLeft(), sx);
+                int w = Math.round(ForgeStyleLayout.BAR_WIDTH * LoadProgress.CURSOR_FRACTION * sx);
+                int left = fx0 + Math.round(ForgeStyleLayout.BAR_WIDTH * LoadProgress.cursorLeft(frame) * sx);
+                MirageDebug.fillRect(gge, fill, left, yTop, left + w, yBot,
+                        pack(alpha, ForgeStyleLayout.COLOUR_ACTIVE));
+            } else {
+                int fx0 = gx(ForgeStyleLayout.barFillLeft(), sx);
+                int fx1 = gx(ForgeStyleLayout.barFillRight(s.fraction()), sx);
+                if (fx1 > fx0) {
+                    MirageDebug.fillRect(gge, fill, fx0, yTop, fx1, yBot,
+                            pack(alpha, ForgeStyleLayout.COLOUR_ACTIVE));
+                }
+            }
+            String head = LoadProgress.meterHead(s);
+            String tail = LoadProgress.meterTail(s);
+            int labelY = gy(ForgeStyleLayout.meterLabelY(i), sy);
+            drawText(gge, fill, truncate(head, gx(ForgeStyleLayout.BAR_WIDTH, sx) / 2, sx),
+                    x0, labelY, sx, pack(alpha, ForgeStyleLayout.COLOUR_ACTIVE));
+            drawText(gge, fill, tail, x1 - textWidth(tail, sx), labelY, sx,
+                    pack(alpha, ForgeStyleLayout.COLOUR_OK));
+        }
+    }
+
+    private static void drawCounters(Object gge, Method fill, float sx, float sy,
+                                     int alpha, LoadProgress.View v) {
+        MirageDebug.fillRect(gge, fill, gx(ForgeStyleLayout.barLeft(), sx),
+                gy(ForgeStyleLayout.DIVIDER_2_TOP, sy),
+                gx(ForgeStyleLayout.barOuterRight(), sx),
+                gy(ForgeStyleLayout.DIVIDER_2_TOP + 1, sy),
+                pack(alpha, ForgeStyleLayout.COLOUR_LINE));
+        drawText(gge, fill, v.counter1(), gx(ForgeStyleLayout.barLeft(), sx),
+                gy(ForgeStyleLayout.counterY(0), sy), sx, pack(alpha, ForgeStyleLayout.COLOUR_ACTIVE));
+        drawText(gge, fill, v.counter2(), gx(ForgeStyleLayout.barLeft(), sx),
+                gy(ForgeStyleLayout.counterY(1), sy), sx, pack(alpha, ForgeStyleLayout.COLOUR_DIM));
+    }
+
+    private static void drawEvents(Object gge, Method fill, float sx, float sy,
+                                   int alpha, LoadProgress.View v) {
+        int gwPx = Math.round(ForgeStyleLayout.DESIGN_WIDTH * sx);
+        int ghPx = Math.round(ForgeStyleLayout.DESIGN_HEIGHT * sy);
+        int margin = Math.round(8 * sx);
+        MirageDebug.fillRect(gge, fill, margin, gy(ForgeStyleLayout.EVENT_PANEL_TOP, sy),
+                gwPx - margin, ghPx, pack(alpha, ForgeStyleLayout.COLOUR_PANEL));
+        drawText(gge, fill, "事件 · " + LoadProgress.EVENT_CAPACITY + " 缓冲",
+                margin + Math.round(4 * sx), gy(ForgeStyleLayout.eventHeaderY(), sy), sx,
+                pack(alpha, ForgeStyleLayout.COLOUR_DIM));
+        java.util.List<String> lines = v.eventLines();
+        int maxTextW = gwPx - 2 * margin - Math.round(8 * sx);
+        for (int i = 0; i < ForgeStyleLayout.EVENT_VISIBLE_LINES && i < lines.size(); i++) {
+            String raw = lines.get(i);
+            drawText(gge, fill, truncate(raw, maxTextW, sx), margin + Math.round(4 * sx),
+                    gy(ForgeStyleLayout.eventLineY(i), sy), sx,
+                    pack(alpha, eventColor(raw)));
+        }
+    }
+
+    /** 事件行按通道着色：一眼分辨阶段 / meter / 告警 / MC 原版。 */
+    private static int eventColor(String line) {
+        if (line.startsWith("[ERROR]")) return ForgeStyleLayout.COLOUR_FAIL;
+        if (line.startsWith("[WARN]")) return ForgeStyleLayout.COLOUR_WARN;
+        if (line.startsWith("[STAGE]")) return ForgeStyleLayout.COLOUR_OK;
+        if (line.startsWith("[METER]")) return 0x88FFFF;
+        return ForgeStyleLayout.COLOUR_DIM;
     }
 
     // ---- 顶部内存条 ----

@@ -6,6 +6,7 @@ import io.mirage.api.event.ClientStartingEvent;
 import io.mirage.eventbus.EventBus;
 import io.mirage.loader.ModContainer;
 import io.mirage.loader.MirageClassLoader;
+import io.mirage.loader.LoadProgress;
 import io.mirage.loader.MirageDebug;
 import io.mirage.ls.LifecycleContext;
 import io.mirage.ls.Stage;
@@ -59,6 +60,9 @@ public final class LoadedStage implements Stage {
 
             MirageLog.MIRAGE.info("通过 MirageClassLoader 加载 " + TARGET_MC_MAIN + " ...");
             io.mirage.loader.MiragePerf.mark("s7.begin");
+            // MC 自己建窗口 / 首次资源重载的耗时没有回调，分母不可得 → 长驻不定条 + 秒表。
+            // 由 MirageDebug.onTitleScreenShown()（TitleScreen.init 织入点）调用 finish() 收掉。
+            LoadProgress.begin("启动 Minecraft 客户端");
 
             // 调试：检查 classpath 能否找到 mod jar 的 assets
             try {

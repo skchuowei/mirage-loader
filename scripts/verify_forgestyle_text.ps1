@@ -44,6 +44,7 @@ $root = Split-Path $PSScriptRoot -Parent
 $files = @{
     "MirageLog.java"         = Join-Path $root "api\mirage-api\src\main\java\io\mirage\api\log\MirageLog.java"
     "MiragePerf.java"        = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\MiragePerf.java"
+    "LoadProgress.java"      = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\LoadProgress.java"
     "MirageDebug.java"       = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\MirageDebug.java"
     "ForgeStyleLayout.java"  = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\ForgeStyleLayout.java"
     "ForgeStyleOverlay.java" = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\ForgeStyleOverlay.java"
@@ -181,6 +182,20 @@ public final class ForgeStyleTextCheck {
         MirageDebug.setPhase(3);            // S4 合并注册表（进行中），S1..S3 应为已完成
         MirageDebug.setStage("unfreeze registry");
         MirageDebug.setProgress(42);
+        // 造出真实仪表盘状态：3 根独立 meter（2 确定 + 1 不定）、真实计数器、事件流。
+        // 没有这些，新形态的 meter/计数/事件带本来就该是空的，断言永远红等于没测。
+        LoadProgress.Meter m1 = LoadProgress.begin("meter-one", 8);
+        LoadProgress.step(m1); LoadProgress.step(m1); LoadProgress.step(m1);
+        LoadProgress.Meter m2 = LoadProgress.begin("meter-two", 12);
+        LoadProgress.set(m2, 5);
+        LoadProgress.Meter m3 = LoadProgress.begin("meter-three");   // 不定条 → 必须画游标
+        LoadProgress.counter("mods.total", 12);
+        LoadProgress.counter("mods.done", 7);
+        LoadProgress.counter("mixin.classes", 37);
+        LoadProgress.counter("reg.total", 214);
+        for (int i = 1; i <= 6; i++) {
+            MirageDebug.log("[Mirage] dashboard event " + i + " / 6");
+        }
         // 两种 GUI 尺寸：854x480 是 guiScale=1 的默认窗口；427x240 是同一窗口 guiScale=2
         scenario("S1", 854, 480);
         scenario("S2", 427, 240);
@@ -270,6 +285,51 @@ public final class ForgeStyleTextCheck {
         System.out.println("STAT " + tag + ".stagelast="
                 + bandBottom(rects, sy, lastRow, lastRow + 16));
         System.out.println("STAT " + tag + ".logtop=" + Math.round(ForgeStyleLayout.LOG_PANEL_TOP * sy));
+
+        // ---- 新形态（真实进度仪表盘）的文字带 ----
+        int breadTop = mc(ForgeStyleLayout.BREADCRUMB_TOP);
+        band(tag, "bread", rects, sy, breadTop, breadTop + 10);
+        for (int k = 0; k < ForgeStyleLayout.METER_COUNT; k++) {
+            int mt = mc(ForgeStyleLayout.meterLabelTop(k));
+            band(tag, "meter" + k, rects, sy, mt, mt + 10);
+        }
+        for (int k = 0; k < 2; k++) {
+            int ct = mc(ForgeStyleLayout.COUNTER_TOP + k * ForgeStyleLayout.COUNTER_ROW_H);
+            band(tag, "counter" + k, rects, sy, ct, ct + 10);
+        }
+        int eh = mc(ForgeStyleLayout.EVENT_HEADER_TOP);
+        band(tag, "eventhdr", rects, sy, eh, eh + 10);
+        for (int k = 0; k < ForgeStyleLayout.EVENT_VISIBLE_LINES; k++) {
+            int el = mc(ForgeStyleLayout.EVENT_LINE_TOP + k * ForgeStyleLayout.EVENT_LINE_H);
+            band(tag, "event" + k, rects, sy, el, el + 10);
+        }
+
+        // ---- 新形态的条形证据：分段总条绿色已完成段 / meter 游标 / meter 真实填充 ----
+        int green = packAlpha(ForgeStyleLayout.COLOUR_OK);
+        int white = packAlpha(ForgeStyleLayout.COLOUR_ACTIVE);
+        int segGreen = 0, meterCursor = 0, meterFill = 0;
+        for (Rect r : rects) {
+            double cy = (r.y0 + r.y1) / 2.0;
+            boolean totalBand = cy >= ForgeStyleLayout.TOTAL_BAR_TOP * sy
+                    && cy <= (ForgeStyleLayout.TOTAL_BAR_TOP + ForgeStyleLayout.TOTAL_BAR_HEIGHT) * sy;
+            if (totalBand && r.argb == green) segGreen++;
+            for (int k = 0; k < ForgeStyleLayout.METER_COUNT; k++) {
+                int bt = ForgeStyleLayout.meterBarTop(k);
+                if (cy < bt * sy || cy > (bt + ForgeStyleLayout.METER_BAR_HEIGHT) * sy) continue;
+                if (r.argb != white) continue;
+                if (r.h() > 12 * sy + 1) continue;   // 外框高 20*sy；填充/游标高 12*sy
+                if (r.w() >= 60 * sx && r.w() <= 100 * sx) meterCursor++;
+                else if (r.w() > 100 * sx) meterFill++;
+            }
+        }
+        System.out.println("STAT " + tag + ".seggreen=" + segGreen);
+        System.out.println("STAT " + tag + ".metercursor=" + meterCursor);
+        System.out.println("STAT " + tag + ".meterfill=" + meterFill);
+        System.out.println("STAT " + tag + ".meters=" + LoadProgress.snapshot(3).size());
+    }
+
+    private static int packAlpha(int rgb) {
+        return 0xFF000000 | (rgb & 0xFFFFFF);
     }
 
     private static void band(String tag, String name, List<Rect> rects, double sy,
@@ -338,6 +398,7 @@ $compile = Invoke-Native $javac @(
     "-d", $classes,
     $files["MirageLog.java"],
     $files["MiragePerf.java"],
+    $files["LoadProgress.java"],
     $files["MirageDebug.java"],
     $files["ForgeStyleLayout.java"],
     $files["ForgeStyleOverlay.java"],
@@ -352,25 +413,38 @@ if ($compile.Code -ne 0) {
 }
 Write-Host "   [OK] 编译通过" -ForegroundColor DarkGreen
 
-Write-Host "== 运行检查程序 ==" -ForegroundColor Cyan
-$run = Invoke-Native $java @(
+Write-Host "== 运行检查程序（旧形态 -Dmirage.ui.oldStepper=true / 新仪表盘 默认） ==" -ForegroundColor Cyan
+$baseArgs = @(
     "-Djava.awt.headless=true",
+    "-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8",
     "-cp", $classes,
     "io.mirage.loader.ForgeStyleTextCheck"
-) "run"
+)
+$runOld = Invoke-Native $java (@("-Dmirage.ui.oldStepper=true") + $baseArgs) "old"
+$runNew = Invoke-Native $java $baseArgs "new"
 
-if ($run.Code -ne 0) {
-    Write-Host "[FAIL] 检查程序异常退出（退出码 $($run.Code)）" -ForegroundColor Red
-    if ($run.Out.Trim()) { Write-Host $run.Out }
-    if ($run.Err.Trim()) { Write-Host $run.Err -ForegroundColor DarkYellow }
-    exit 1
+foreach ($r in @($runOld, $runNew)) {
+    if ($r.Code -ne 0) {
+        Write-Host "[FAIL] 检查程序 [$($r.Tag)] 异常退出（退出码 $($r.Code)）" -ForegroundColor Red
+        if ($r.Out.Trim()) { Write-Host $r.Out }
+        if ($r.Err.Trim()) { Write-Host $r.Err -ForegroundColor DarkYellow }
+        exit 1
+    }
 }
 
-$lines = ($run.Out -split "`r?`n") | Where-Object { $_.Trim() }
-$lines | ForEach-Object { Write-Host "   $_" -ForegroundColor DarkGray }
+$oldLines = ($runOld.Out -split "`r?`n") | Where-Object { $_.Trim() }
+$newLines = ($runNew.Out -split "`r?`n") | Where-Object { $_.Trim() }
+$script:lines = $oldLines
+$lines = $oldLines
+Write-Host "-- 旧形态 STAT（摘要）--" -ForegroundColor DarkGray
+$oldLines | Where-Object { $_ -match "\.glyphs=|\.band\.log=|\.stagelast=" } |
+    ForEach-Object { Write-Host "   $_" -ForegroundColor DarkGray }
+Write-Host "-- 新仪表盘 STAT（摘要）--" -ForegroundColor DarkGray
+$newLines | Where-Object { $_ -match "\.glyphs=|\.seggreen=|\.metercursor=|\.meterfill=|\.meters=" } |
+    ForEach-Object { Write-Host "   $_" -ForegroundColor DarkGray }
 
 function Stat([string]$tag, [string]$key) {
-    $m = $lines | Where-Object { $_ -match ("^STAT " + [regex]::Escape($tag) + "\." + [regex]::Escape($key) + "=(.*)$") }
+    $m = $script:lines | Where-Object { $_ -match ("^STAT " + [regex]::Escape($tag) + "\." + [regex]::Escape($key) + "=(.*)$") }
     if (-not $m) { return $null }
     return ([regex]::Match($m, "=(.*)$")).Groups[1].Value
 }
@@ -434,6 +508,46 @@ foreach ($tag in @("S1", "S2")) {
     Assert-True ($stageLast -gt 0) "步骤条最后一行有字形（底部 $stageLast）"
     Assert-True ($stageLast -le $logTop) `
         "步骤条最后一行($stageLast) 不越过日志面板顶边($logTop)"
+}
+
+# ---------------------------------------------------------------- 新仪表盘形态断言
+# 同一份编译产物再跑一次（不加 -Dmirage.ui.oldStepper），验证「真进度条」不是只有常量：
+#   分段总条的已完成段、不定条游标、确定条真实填充、meter/计数/事件文字带都必须出像素。
+
+$script:lines = $newLines
+foreach ($tag in @("S1", "S2")) {
+    $label = if ($tag -eq "S1") { "854x480 (guiScale=1)" } else { "427x240 (guiScale=2)" }
+    Write-Host "== 新仪表盘 $tag : $label ==" -ForegroundColor Cyan
+
+    $bg = Stat $tag "bg"
+    Assert-True ($bg -eq "0,0,854,480,0xFFEF323D" -or $bg -eq "0,0,427,240,0xFFEF323D") `
+        "第一块仍是全屏 Forge 红底（实际 $bg）"
+
+    $glyphs = [int](Stat $tag "glyphs")
+    Assert-True ($glyphs -ge 40) "新形态字形像素块 >= 40（实际 $glyphs）"
+    $overflow = [int](Stat $tag "overflow")
+    Assert-True ($overflow -eq 0) "新形态没有任何绘制越出画布（越界块 $overflow 个）"
+
+    $memCenter = [int](Stat $tag "memcenter")
+    $canvasCenter = [int](Stat $tag "canvascenter")
+    Assert-True ([math]::Abs($memCenter - $canvasCenter) -le 8) "内存文字仍水平居中（$memCenter vs $canvasCenter）"
+
+    # 真实条形的矩形证据
+    $segGreen = [int](Stat $tag "seggreen")
+    Assert-True ($segGreen -ge 3) "分段总条有 >=3 个已完成段（实际 $segGreen）"
+    $cursor = [int](Stat $tag "metercursor")
+    Assert-True ($cursor -ge 1) "不定 meter 画了滑动游标块（实际 $cursor）"
+    $fill = [int](Stat $tag "meterfill")
+    Assert-True ($fill -ge 2) "两根确定 meter 按真实分子/分母填充（实际 $fill）"
+    $meterCount = [int](Stat $tag "meters")
+    Assert-True ($meterCount -ge 3) "meter 栈里确实有 3 根独立任务（实际 $meterCount）"
+
+    foreach ($band in @("bread", "meter0", "meter1", "meter2", "counter0", "counter1",
+                        "eventhdr", "event0", "event1", "event2", "event3")) {
+        $raw = Stat $tag "band.$band"
+        $n = [int](($raw -split ",")[0])
+        Assert-True ($n -ge 3) "新形态文字带 $band 有字（块数 $n >= 3）"
+    }
 }
 
 # ---------------------------------------------------------------- 源码守卫

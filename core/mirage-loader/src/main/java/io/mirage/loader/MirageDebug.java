@@ -41,8 +41,8 @@ public final class MirageDebug {
     private static final OperatingSystemMXBean osBean = ManagementFactory.getOperatingSystemMXBean();
     private static volatile String lastLogLine = "";
 
-    /** 加载界面底部滚动日志节选（最近 16 行，比 HUD 多，用于占屏幕 1/3~1/4 的日志面板）。 */
-    private static final int LOADING_LOG_CAPACITY = 16;
+    /** 加载界面底部滚动日志节选（最近 32 行，与事件流环形缓冲同容量）。 */
+    private static final int LOADING_LOG_CAPACITY = 32;
     private static final Deque<String> loadingLog = new ArrayDeque<>(LOADING_LOG_CAPACITY);
 
     /**
@@ -54,7 +54,10 @@ public final class MirageDebug {
             "发现解析清单字节码变换合并注册表事件总线初始化启动客户端"
             + "创建类加载器扫描目录检测版本解冻修补冻结加载脚本已"
             + "总进度当前阶段日志实时失败错误异常缺无法资源方法字段警告"
-            + "找不到跳过忽略冲突信息模式完成进行待处理·—：（）";
+            + "找不到跳过忽略冲突信息模式完成进行待处理·—：（）"
+            // 2026-11-07 真实进度仪表盘新增词（早期窗口 STB 图集缺字是静默留白，必须显式补）
+            + "事件缓冲条候选挂载织入收集配置装配项秒游标独立不定计数根耗"
+            + "后端原版注册项已完成进行中待处理数段格";
 
     /**
      * 日志面板要显示的中文全集：从全仓库字符串字面量扫描得到（594 字，含标点）。
@@ -87,12 +90,14 @@ public final class MirageDebug {
     // ---- S1–S7 主阶段模型（供加载界面步骤条与阶段摘要使用） ----
     /** 当前所处主阶段索引 0..6（S1..S7）。由各阶段在入口处 {@link #setPhase} 标注。 */
     public static volatile int phase = 0;
-    public static final int STAGE_COUNT = 7;
-    public static final String[] PHASE_NAMES = {
-            "发现Mod", "解析清单", "字节码变换", "合并注册表", "事件总线", "初始化Mod", "启动客户端"
-    };
+    public static final int STAGE_COUNT = LoadProgress.STAGE_COUNT;
+    /** 阶段名统一由 LoadProgress 持有（仪表盘面包屑与主条标签要用同一份）。 */
+    public static final String[] PHASE_NAMES = LoadProgress.STAGE_NAMES;
 
-    public static void setStage(String s) { stage = s; }
+    public static void setStage(String s) {
+        stage = s;
+        LoadProgress.detail(s);
+    }
     public static void setProgress(int p) { progress = p; }
     public static void setModCount(int n) { modCount = n; }
     public static void setModTotal(int n) { modTotal = n; }
@@ -100,9 +105,12 @@ public final class MirageDebug {
     public static void setModList(String s) { modList = s; }
     public static void setLoaded() { loaded = true; }
 
-    /** 标注当前主阶段（S1..S7 对应 0..6），供加载界面步骤条定位「进行中/已完成」。 */
+    /** 标注当前主阶段（S1..S7 对应 0..6），同时推进分段总进度并发阶段事件。 */
     public static void setPhase(int p) {
-        if (p >= 0 && p < STAGE_COUNT) phase = p;
+        if (p >= 0 && p < STAGE_COUNT) {
+            phase = p;
+            LoadProgress.stage(p);
+        }
     }
 
     /** 各阶段状态：2=已完成 / 1=进行中 / 0=待处理。 */
@@ -123,7 +131,7 @@ public final class MirageDebug {
         return "S" + (p + 1) + " " + PHASE_NAMES[p] + " · " + sub + " (" + progress + "%)";
     }
 
-    /** 加载界面底部滚动日志（最近最多 16 行，旧→新）。 */
+    /** 加载界面底部滚动日志（最近最多 32 行，旧→新）；OLD_STEPPER 旧界面仍读它。 */
     public static String[] loadingLogLines() {
         synchronized (recentLogs) {
             return loadingLog.toArray(new String[0]);
@@ -303,23 +311,37 @@ public final class MirageDebug {
             if (loadingLog.size() >= LOADING_LOG_CAPACITY) loadingLog.pollFirst();
             loadingLog.addLast(s);
         }
+        // 事件流（真实日志 + 阶段/meter 事件共用同一个环形缓冲）；通道决定行的颜色。
+        LoadProgress.event(LoadProgress.channelOf(s), cleanLog(s));
+        if (s.contains("WARN") || s.contains("警告")) LoadProgress.increment("warn");
         // 主窗口像素字缓存按需光栅化汉字（早期窗口走 STB 图集，无须此路径）。
         // 只在调用线程上做 AWT 光栅化，不在渲染线程，安全。
         ensureRasterized(s);
     }
 
+    /** 去掉 log4j 的 "[14:54:14] [main/INFO]: " 外壳，事件流只留正文。 */
+    private static String cleanLog(String s) {
+        int i = s.indexOf("]: ");
+        return (s.startsWith("[") && i >= 0) ? s.substring(i + 3) : s;
+    }
+
     /**
-     * HUD 节选的准入判断。
+     * HUD / 事件流节选的准入判断。
      *
      * <p>行首可能带 log4j 前缀（{@code [14:54:14] [main/INFO]: [STDOUT]: }），所以只能用
-     * {@code contains} 而不是 {@code startsWith}。前缀清单必须与 {@link MirageLog} 里定义的
-     * 通道保持一致——新增通道时这里要同步，否则该通道的日志不会出现在 HUD 上。
+     * {@code contains} 而不是 {@code startsWith}。2026-11-07 起从「5 个 Mirage 自家前缀」
+     * 放宽到通道表：mod 自己的日志、Fabric/NeoForge 兼容层、错误分级通道都要能进事件流，
+     * 否则 S4/S7 长等待期间面板完全静止。DEBUG 仅在显式打开 debug 级别时进 UI。
      */
     private static final String[] KNOWN_PREFIXES = {
-            "[Mirage", "[LS]", "[Loader]", "[MidCache]", "[Mirage-Mixin]"
+            "[Mirage", "[LS]", "[Loader]", "[MidCache]", "[MID]",
+            "[Fabric]", "[NeoForge]", "[MG-FATAL]", "[MG-ERROR]", "[MG-WARN]", "[MG-IGNORE]"
     };
+    private static final boolean UI_DEBUG =
+            "debug".equalsIgnoreCase(System.getProperty("mirage.log.level", ""));
 
     private static boolean isImportantLog(String s) {
+        if (!UI_DEBUG && (s.contains("DEBUG") || s.contains("/DEBUG"))) return false;
         for (String p : KNOWN_PREFIXES) {
             if (s.contains(p)) return true;
         }
@@ -452,6 +474,9 @@ public final class MirageDebug {
     /** 标题界面出现时由 ASM 织入的 TitleScreen.init() 调用 */
     public static void onTitleScreenShown() {
         loaded = true;
+        // TitleScreen 是加载期的真正终点：收掉所有长驻 meter（尤其是 S7 的 MC 主类不定条），
+        // 分段总条填满，事件流留一条 "加载完成 · 总耗时"。
+        if (!LoadProgress.isFinished()) LoadProgress.finish();
         // 性能锚点：TitleScreen 就绪 = 用户真正能操作游戏的时刻。
         // S7 Loaded done 只是「mod 管线结束」，MC 自身的资源重载还没走完——
         // 没有这个锚点就答不出「点开游戏到能玩要多久」（docs/perf-baseline.md §5 的缺口 3）。

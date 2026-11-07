@@ -6,6 +6,7 @@ import io.mirage.api.log.MirageLog;
 import io.mirage.loader.ModContainer;
 import io.mirage.loader.MirageClassLoader;
 import io.mirage.loader.MirageDebug;
+import io.mirage.loader.LoadProgress;
 import io.mirage.ls.LifecycleContext;
 import io.mirage.ls.Stage;
 import io.mirage.ls.StageOutcome;
@@ -55,11 +56,15 @@ public final class TransformStage implements Stage {
             MirageLog.MIRAGE.info("创建 MirageClassLoader，" + urls.length + " 个 URL");
             MirageClassLoader mcl = new MirageClassLoader(urls, ClassLoader.getSystemClassLoader().getParent());
 
-            // 把每个 Mod jar 加入 classloader
+            // 把每个 Mod jar 加入 classloader（真实分母 = mods.size()）
+            LoadProgress.Meter jarMeter = LoadProgress.begin("挂载 jar", mods.size());
+            int jarIdx = 0;
             for (ModContainer mod : mods) {
+                LoadProgress.set(jarMeter, ++jarIdx);
                 mcl.addJar(mod.jarFile.toFile());
                 MirageLog.MIRAGE.debug("添加 mod jar: " + mod.jarFile.getFileName());
             }
+            LoadProgress.end(jarMeter);
 
             // ---- 可选模块懒加载（G9）----
             // 时机：mcl 已建、mod jar 已全部加入 —— 此时加模块 jar 不会与 mod jar 抢优先级，
@@ -77,7 +82,10 @@ public final class TransformStage implements Stage {
             // 查不到静默吞（Error encountered reading mixin config），缺后缀 = config 永远不生效。
             java.util.Map<String, io.mirage.loader.mixin.ModMixinConfigs.Result> perMod =
                     new java.util.LinkedHashMap<>();
+            LoadProgress.Meter cfgMeter = LoadProgress.begin("收集 mixin 配置", mods.size());
+            int cfgIdx = 0;
             for (ModContainer mod : mods) {
+                LoadProgress.set(cfgMeter, ++cfgIdx);
                 List<String> declared = mod.fabricMixinConfigs != null ? mod.fabricMixinConfigs : List.of();
                 java.util.Set<String> rootEntries = new java.util.LinkedHashSet<>();
                 java.util.Set<String> allEntries = new java.util.LinkedHashSet<>();
@@ -97,6 +105,7 @@ public final class TransformStage implements Stage {
                 perMod.put(mod.manifest.id, io.mirage.loader.mixin.ModMixinConfigs.collectOne(
                         mod.manifest.id, declared, rootEntries, allEntries));
             }
+            LoadProgress.end(cfgMeter);
             for (java.util.Map.Entry<String, io.mirage.loader.mixin.ModMixinConfigs.Result> e : perMod.entrySet()) {
                 if (!e.getValue().missing.isEmpty()) {
                     MirageLog.MIXIN.warn("mod '" + e.getKey() + "' 声明的 mixin config 在 jar 中不存在: "
@@ -111,6 +120,9 @@ public final class TransformStage implements Stage {
             mixinConfigs.add("mirage.mixins.json");
             io.mirage.mixin.MirageMixinBootstrap.init(mcl, mixinConfigs);
             MirageLog.MIXIN.info("Mixin 管线初始化完成, " + mixinConfigs.size() + " 个 config");
+            // 实际织入发生在 MC 类加载期（S7 乃至进世界之后），目标类总数拿不到 → 长驻不定条。
+            // 计数由 MirageClassLoader 每经过一次 Mixin 管线就 +1，显示在计数行 "mixin N"。
+            LoadProgress.begin("织入字节码");
 
             // 同时把 mod jar 加入系统 classloader（AppClassLoader），
             // 因为 MC 类可能被 AppClassLoader 加载，资源系统用它的 getResource()

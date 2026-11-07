@@ -197,17 +197,22 @@ if ($missingJar) {
     Expand-Jar $jars.CoreNat $lib
     Expand-Jar $jars.StbNat $lib
 
-    # 汉字全集：直接从 MirageDebug 的常量拼出来，不复制一份字表
+    # 汉字全集：早期窗口实际打包的是「UI 字表 + 日志字表」的并集
+    # （MirageEarlyWindow: LOADING_CJK_SOURCE + LOADING_CJK_LOG_SOURCE），
+    # 只测其中一份会漏掉 UI 新增词——STB 缺字是静默留白，不验就发现不了。
     $dbgSrc = Get-Content -Raw -Encoding UTF8 $mirageDebug
     $mConst = [regex]::Match($dbgSrc, 'public static final String LOADING_CJK_LOG_SOURCE\s*=\s*(.*?);', 'Singleline')
+    $mUi = [regex]::Match($dbgSrc, 'public static final String LOADING_CJK_SOURCE\s*=\s*(.*?);', 'Singleline')
     $cjk = ""
-    if ($mConst.Success) {
-        foreach ($lit in [regex]::Matches($mConst.Groups[1].Value, '"((?:[^"\\]|\\.)*)"')) {
-            $cjk += $lit.Groups[1].Value
+    foreach ($m in @($mUi, $mConst)) {
+        if ($m.Success) {
+            foreach ($lit in [regex]::Matches($m.Groups[1].Value, '"((?:[^"\\]|\\.)*)"')) {
+                $cjk += $lit.Groups[1].Value
+            }
         }
     }
-    Assert-True ($mConst.Success -and $cjk.Length -gt 400) `
-        "能从 MirageDebug 取到日志汉字全集（长度 $($cjk.Length)）"
+    Assert-True ($mConst.Success -and $mUi.Success -and $cjk.Length -gt 400) `
+        "能从 MirageDebug 取到 UI+日志汉字全集（拼接长度 $($cjk.Length)，UI 常量存在=$($mUi.Success)）"
     $cjkFile = Join-Path $work "cjk.txt"
     [System.IO.File]::WriteAllText($cjkFile, $cjk, (New-Object System.Text.UTF8Encoding($false)))
 

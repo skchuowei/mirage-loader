@@ -2,6 +2,7 @@ package io.mirage.ls.stage;
 
 import io.mirage.api.log.MirageLog;
 import io.mirage.api.registry.DeferredRegister;
+import io.mirage.loader.LoadProgress;
 import io.mirage.loader.MirageDebug;
 import io.mirage.ls.LifecycleContext;
 
@@ -80,7 +81,9 @@ public final class RegistryWindow {
         io.mirage.loader.MirageDebug.setStage("检测 MC 版本");
         io.mirage.loader.MirageDebug.setProgress(22);
         Class<?> sc = Class.forName("net.minecraft.SharedConstants", true, mcl);
+        LoadProgress.Meter versionMeter = LoadProgress.begin("检测 MC 版本");
         sc.getMethod("tryDetectVersion").invoke(null);
+        LoadProgress.end(versionMeter);
         io.mirage.loader.MiragePerf.mark("s4.version");
 
         // ---- 单线程：mod 全部初始化完成后再启动 Minecraft 主类 ----
@@ -88,7 +91,11 @@ public final class RegistryWindow {
         io.mirage.loader.MirageDebug.setStage("初始化注册表");
         io.mirage.loader.MirageDebug.setProgress(32);
         Class<?> bootstrap = Class.forName("net.minecraft.server.Bootstrap", true, mcl);
+        // 黑盒：MC 原版不给任何回调，分母不可得 → 不定条 + 实时秒表（实测 6.8~40.2s）。
+        // 这是「加载界面不能停在 42% 不动」的核心修复点。
+        LoadProgress.Meter bootstrapMeter = LoadProgress.begin("初始化注册表（原版）");
         bootstrap.getMethod("bootStrap").invoke(null);
+        LoadProgress.end(bootstrapMeter);
         // 注意：Bootstrap.bootStrap() 是 **MC 原版**的注册表填充与 freeze，
         // 它的耗时是 MC 自己的成本，不是 Mirage 的开销——S4 大头很可能就在这里。
         io.mirage.loader.MiragePerf.mark("s4.bootstrap");
@@ -126,13 +133,23 @@ public final class RegistryWindow {
 
         // 遍历 registry-of-registries，对所有 MappedRegistry 实例解冻（vanilla 时序：先全解冻再注册后全冻结）
         Object registryOfRegistries = builtInReg.getField("REGISTRY").get(null);
+        // 先数一遍总数，才能给出真实分母（不是按历史耗时估一个百分比）。
+        int regTotal = 0;
+        for (Object r : (Iterable<?>) registryOfRegistries) {
+            if (mappedReg.isInstance(r)) regTotal++;
+        }
+        LoadProgress.Meter unfreezeMeter = LoadProgress.begin("解冻注册表", regTotal);
         List<Object> allMappedRegistries = new ArrayList<>();
+        int unfrozen = 0;
         for (Object r : (Iterable<?>) registryOfRegistries) {
             if (mappedReg.isInstance(r)) {
                 allMappedRegistries.add(r);
                 unfreeze.accept(r);
+                LoadProgress.set(unfreezeMeter, ++unfrozen);
             }
         }
+        LoadProgress.end(unfreezeMeter);
+        LoadProgress.counter("reg.total", regTotal);
         MirageLog.MIRAGE.info("已解冻 " + allMappedRegistries.size() + " 个 MappedRegistry");
         io.mirage.loader.MiragePerf.mark("s4.unfreeze");
 
@@ -273,6 +290,8 @@ public final class RegistryWindow {
         // 遍历 BuiltInRegistries.BLOCK 所有 entry
         Map<?, ?> byValue = (Map<?, ?>) byValueField.get(blockReg);
         int patched = 0;
+        LoadProgress.Meter patchMeter = LoadProgress.begin("修补 BlockState", byValue.size());
+        int patchIdx = 0;
         Method holderGetMethod;
         try {
             holderGetMethod = Class.forName("net.minecraft.core.Holder$Reference", true, mcl).getMethod("value");
@@ -281,6 +300,7 @@ public final class RegistryWindow {
             holderGetMethod = Class.forName("net.minecraft.core.Holder$Reference", true, mcl).getMethod("get");
         }
         for (Object holder : byValue.values()) {
+            LoadProgress.set(patchMeter, ++patchIdx);
             try {
                 Object block = holderGetMethod.invoke(holder);
                 Method defaultState = blockCls.getMethod("defaultBlockState");
@@ -301,6 +321,7 @@ public final class RegistryWindow {
                 // 跳过不能访问的
             }
         }
+        LoadProgress.end(patchMeter);
         MirageLog.MIRAGE.info("已修补 " + patched + " 个 BlockState");
     }
 
@@ -328,9 +349,14 @@ public final class RegistryWindow {
         } catch (Exception e) {
             MirageLog.MIRAGE.warn("unregisteredIntrusiveHolders 兜底检查失败（注册表 freeze 可能报残留告警）", e);
         }
+        LoadProgress.Meter freezeMeter = LoadProgress.begin("冻结注册表", 3);
         blockReg.getClass().getMethod("freeze").invoke(blockReg);
+        LoadProgress.step(freezeMeter);
         itemReg.getClass().getMethod("freeze").invoke(itemReg);
+        LoadProgress.step(freezeMeter);
         tabReg.getClass().getMethod("freeze").invoke(tabReg);
+        LoadProgress.step(freezeMeter);
+        LoadProgress.end(freezeMeter);
     }
 
     /** 供 S2 判定/调试：当前窗口类加载器。 */

@@ -13,6 +13,7 @@ import io.mirage.eventbus.EventBus;
 import io.mirage.loader.MidCache;
 import io.mirage.loader.ModContainer;
 import io.mirage.loader.MirageClassLoader;
+import io.mirage.loader.LoadProgress;
 import io.mirage.loader.MirageDebug;
 import io.mirage.loader.passive.PassiveRecorder;
 import io.mirage.ls.LifecycleContext;
@@ -86,7 +87,10 @@ public final class ModInitStage implements Stage {
             // 进度区间 45% ~ 65%，按 mod 数量线性推进
             int modIdx = 0;
             int modTotal = mods.size();
+            LoadProgress.Meter modMeter = LoadProgress.begin("初始化 mod", modTotal);
+            int modCursor = 0;
             for (ModContainer mod : mods) {
+                LoadProgress.set(modMeter, ++modCursor);
                 // S2 失败策略已判定的跳过集合（skip / confirm+S）——不重复告警
                 if (ctx.skippedMods().contains(mod.manifest.id)) {
                     continue;
@@ -112,6 +116,8 @@ public final class ModInitStage implements Stage {
                 // 与 MCL 版本冲突（LinkageError）。与 NeoLifecycle 同一套路。
                 if (mod.scriptRoot != null) {
                     modIdx++;
+                    LoadProgress.counter("mods.done", modIdx);
+                    LoadProgress.label(modMeter, "加载脚本 mod · " + mod.manifest.id);
                     int modProgress = modTotal > 0 ? 45 + (int) (20.0 * modIdx / modTotal) : 50;
                     MirageDebug.setStage("加载脚本 mod");
                     MirageDebug.setCurrentMod(mod.manifest.id + " v" + mod.manifest.version);
@@ -140,6 +146,8 @@ public final class ModInitStage implements Stage {
                     continue;
                 }
                 modIdx++;
+                LoadProgress.counter("mods.done", modIdx);
+                LoadProgress.label(modMeter, "初始化 mod · " + mod.manifest.id);
                 int modProgress = modTotal > 0 ? 45 + (int) (20.0 * modIdx / modTotal) : 50;
                 MirageDebug.setStage("初始化 mod");
                 MirageDebug.setCurrentMod(mod.manifest.id + " v" + mod.manifest.version);
@@ -228,6 +236,7 @@ public final class ModInitStage implements Stage {
                 VersionMasks.leave();
                 archivePassive(cache, mod);
             }
+            LoadProgress.end(modMeter);
             MirageDebug.setCurrentMod("");
             // 被动捕获汇总：一行看清本轮捕了多少、丢了多少（丢 = 有入口失败，半成品不入库）
             int[] passive = PassiveRecorder.stats();
@@ -238,7 +247,11 @@ public final class ModInitStage implements Stage {
 
             // DeferredRegister 闭环：所有 mod 声明完条目后统一 flush（仍在 unfreeze 窗口内）
             MirageLog.MIRAGE.info("flush " + pendingRegisters.size() + " 个 DeferredRegister ...");
+            LoadProgress.counter("def.total", pendingRegisters.size());
+            LoadProgress.Meter flushMeter = LoadProgress.begin("flush 注册项", pendingRegisters.size());
+            int flushed = 0;
             for (DeferredRegister<?> dr : pendingRegisters) {
+                LoadProgress.set(flushMeter, ++flushed);
                 try {
                     dr.flush();
                 } catch (Throwable t) {
@@ -246,6 +259,8 @@ public final class ModInitStage implements Stage {
                     MirageLog.MIRAGE.error("DeferredRegister flush 失败: modId=" + dr.modId(), t);
                 }
             }
+            LoadProgress.end(flushMeter);
+            LoadProgress.counter("def.done", flushed);
 
             // NeoForge 生命周期事件桥接：mod 已全部构造、注册闭环完成，
             // 向 mod bus post 构造/配置/IMC/通用 setup 事件，
@@ -276,6 +291,7 @@ public final class ModInitStage implements Stage {
             ctx.properties().put("S6.scriptHosts", scriptHosts);
 
             // ---- 失败汇总：一次看清「哪些 mod 没起来、为什么」----
+            LoadProgress.counter("fail", failures.size());
             if (!failures.isEmpty()) {
                 MirageLog.MIRAGE.warn("本次共 " + failures.size()
                         + " 个 mod 初始化失败（游戏继续，相关功能可能缺失）: "

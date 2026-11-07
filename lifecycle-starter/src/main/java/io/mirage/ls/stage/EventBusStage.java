@@ -36,7 +36,10 @@ public final class EventBusStage implements Stage {
         Object bus = ctx.properties().get("S2.eventBus");
         Object mods = ctx.properties().get("S1.mods");
         Object mcl = ctx.properties().get("S3.classLoader");
-        if (bus == null || mods == null || mcl == null) {
+        boolean ok = bus != null && mods != null && mcl != null;
+        io.mirage.loader.LoadProgress.event(ok ? "STAGE" : "ERROR",
+                "S5 事件总线检查点" + (ok ? "通过" : "失败（pipeline 状态缺失）"));
+        if (!ok) {
             return StageOutcome.fatal("S5 事件总线检查点失败：pipeline 状态缺失"
                     + "（eventBus=" + (bus != null) + ", mods=" + (mods != null)
                     + ", classLoader=" + (mcl != null) + "）——阶段接线错误");

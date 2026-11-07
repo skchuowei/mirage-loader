@@ -83,13 +83,18 @@ public final class ParseStage implements Stage {
     private static StageOutcome applyParseFailPolicy(LifecycleContext ctx, List<ModContainer> mods) {
         ParseFailPolicy policy = ctx.failPolicy();
         List<ModContainer> unresolved = new ArrayList<>();
+        io.mirage.loader.LoadProgress.Meter parseMeter =
+                io.mirage.loader.LoadProgress.begin("解析清单", mods.size());
+        int parsed = 0;
         for (ModContainer mod : mods) {
+            io.mirage.loader.LoadProgress.set(parseMeter, ++parsed);
             if (ctx.skippedMods().contains(mod.manifest.id)) continue;
             if (ModEntrypoints.mainClasses(mod).isEmpty()
                     && ModEntrypoints.sideClasses(mod, ctx.dist()).isEmpty()) {
                 unresolved.add(mod);
             }
         }
+        io.mirage.loader.LoadProgress.end(parseMeter);
         if (unresolved.isEmpty()) {
             return StageOutcome.success();
         }

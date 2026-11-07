@@ -106,6 +106,8 @@ public class MirageClassLoader extends URLClassLoader {
         // 2) SpongePowered Mixin 管线（mod 通过 @Inject/@Redirect 织入目标 MC 类）
         //    Bootstrap 未就绪时该调用直接原样返回字节码，不影响现有行为。
         transformed = io.mirage.mixin.MirageMixinBootstrap.transform(name, transformed);
+        // 仪表盘真实计数：每有一个类经过 Mixin 管线就 +1（分母未知，故只计数不画百分比）。
+        LoadProgress.increment("mixin.classes");
         return defineClass(name, transformed, 0, transformed.length);
     }
 

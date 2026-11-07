@@ -113,6 +113,54 @@ public final class ForgeStyleLayout {
      */
     public static final int MC_TEXT_OFFSET = 8;
 
+    // ---- 真实进度仪表盘布局（2026-11-07；旧步骤条常量一律保留，供 OLD_STEPPER 回滚分支与既有断言使用） ----
+    //
+    // 纵向节奏（早期窗口「文本左上 y」语义，墨迹 y+9..y+26；MC 锚点 = y+8）：
+    //   内存条 10..30 → 内存文字 28(37..54) → 分段总条 58..72 → 总进度标签 74(墨迹至 100)
+    //   → 分隔线 102 → 面包屑 104(112..130) → meter1 label 132 / bar 161..181
+    //   → meter2 label 186 / bar 215..235 → meter3 label 240 / bar 269..289
+    //   → 分隔线 296 → 计数行 304 / 328 → 事件标题 356 → 事件 4 行 382/404/426/448(末行墨迹 474)
+    // 事件流为什么只有 4 行：第 5 行的墨迹会顶到 496 > 480（详见 docs/plans 里的像素预算）。
+    /** 第一条分隔线（总进度标签与面包屑之间）。 */
+    public static final int DIVIDER_1_TOP = 102;
+    /** 面包屑行（S1+ S2+ S3> …）的「文本左上 y」。 */
+    public static final int BREADCRUMB_TOP = 104;
+    /** 屏幕上最多画几根独立 meter（Neo 是 2，我们多留 1 根给长驻的织入计数条）。 */
+    public static final int METER_COUNT = 3;
+    /** 第一根 meter 的 label「文本左上 y」。 */
+    public static final int METER_LABEL_TOP = 132;
+    /** 相邻 meter 的行距（label→label）。 */
+    public static final int METER_ROW_H = 54;
+    /** label 左上 → 条顶边。 */
+    public static final int METER_LABEL_TO_BAR = 29;
+    /** meter 条高。 */
+    public static final int METER_BAR_HEIGHT = 20;
+    /** 第二条分隔线（meter 区与计数区之间）。 */
+    public static final int DIVIDER_2_TOP = 296;
+    /** 计数行第一行的「文本左上 y」。 */
+    public static final int COUNTER_TOP = 304;
+    /** 计数行行距。 */
+    public static final int COUNTER_ROW_H = 24;
+    /** 事件面板顶边（深色底）。 */
+    public static final int EVENT_PANEL_TOP = 348;
+    /** 事件流标题「文本左上 y」。 */
+    public static final int EVENT_HEADER_TOP = 356;
+    /** 事件流第一行「文本左上 y」。 */
+    public static final int EVENT_LINE_TOP = 382;
+    /** 事件流行距（24px 字墨迹高 17，留 5px 间隙）。 */
+    public static final int EVENT_LINE_H = 22;
+    /** 事件流可见行数（4 行末行墨迹 448+26=474 < 480）。 */
+    public static final int EVENT_VISIBLE_LINES = 4;
+
+    /** 状态色（0xRRGGBB，两窗口各自转成 ARGB / ABGR）。 */
+    public static final int COLOUR_OK = 0x55FF55;
+    public static final int COLOUR_ACTIVE = 0xFFFFFF;
+    public static final int COLOUR_WARN = 0xFFFF55;
+    public static final int COLOUR_FAIL = 0xFF5555;
+    public static final int COLOUR_DIM = 0x888888;
+    public static final int COLOUR_PANEL = 0x141414;
+    public static final int COLOUR_LINE = 0x404040;
+
     private ForgeStyleLayout() {
     }
 
@@ -203,6 +251,47 @@ public final class ForgeStyleLayout {
     /** 日志面板第一行可绘制的「文本左上 y」（标题行之后）。 */
     public static int logFirstLineTop() {
         return LOG_PANEL_TOP + LOG_HEADER_H;
+    }
+
+    // ---- 真实进度仪表盘（设计坐标 → MC 字体锚点；早期窗口直接用上面的 *_TOP） ----
+
+    /** 第 index 根 meter 的 label「文本左上 y」。 */
+    public static int meterLabelTop(int index) {
+        return METER_LABEL_TOP + index * METER_ROW_H;
+    }
+
+    /** 第 index 根 meter 的条顶边。 */
+    public static int meterBarTop(int index) {
+        return meterLabelTop(index) + METER_LABEL_TO_BAR;
+    }
+
+    public static int meterLabelY(int index) {
+        return meterLabelTop(index) + MC_TEXT_OFFSET;
+    }
+
+    public static int breadcrumbY() {
+        return BREADCRUMB_TOP + MC_TEXT_OFFSET;
+    }
+
+    public static int counterY(int index) {
+        return COUNTER_TOP + index * COUNTER_ROW_H + MC_TEXT_OFFSET;
+    }
+
+    public static int eventHeaderY() {
+        return EVENT_HEADER_TOP + MC_TEXT_OFFSET;
+    }
+
+    public static int eventLineY(int index) {
+        return EVENT_LINE_TOP + index * EVENT_LINE_H + MC_TEXT_OFFSET;
+    }
+
+    /** 分段总条里第 index 段的左右边界（等宽 7 段）。 */
+    public static int segmentLeft(int index) {
+        return barLeft() + Math.round(BAR_WIDTH * (float) index / LoadProgress.STAGE_COUNT);
+    }
+
+    public static int segmentRight(int index) {
+        return barLeft() + Math.round(BAR_WIDTH * (float) (index + 1) / LoadProgress.STAGE_COUNT);
     }
 
     private static float clamp01(float v) {

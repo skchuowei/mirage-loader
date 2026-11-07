@@ -67,6 +67,9 @@ public final class DiscoveryStage implements Stage {
             }
 
             io.mirage.loader.MirageDebug.setModTotal(mods.size());
+            io.mirage.loader.LoadProgress.counter("mods.total", mods.size());
+            io.mirage.loader.LoadProgress.event("STAGE", "发现 " + mods.size() + " 个 mod，候选 "
+                    + io.mirage.loader.LoadProgress.counterValue("mods.candidates", 0L) + " 个");
             MirageLog.MIRAGE.info("发现 " + mods.size() + " 个 mod");
             for (ModContainer m : mods) {
                 io.mirage.loader.MirageDebug.modNamespaces.add(m.manifest.id);

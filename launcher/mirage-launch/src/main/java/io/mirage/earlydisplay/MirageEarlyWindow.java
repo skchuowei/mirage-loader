@@ -49,6 +49,11 @@ public final class MirageEarlyWindow {
     private static final Object START_LOCK = new Object();
     private static volatile MirageEarlyWindow instance;
 
+    /** 回滚开关：与主窗口同值，{@code -Dmirage.ui.oldStepper=true} 恢复 S1–S7 步骤条旧界面。 */
+    private static final boolean OLD_STEPPER = Boolean.getBoolean("mirage.ui.oldStepper");
+    /** 仪表盘文本快照间隔（秒表 0.1s 一变，200ms 一采足够）。 */
+    private static final long VIEW_SNAPSHOT_MS = 200L;
+
     private final Semaphore renderLock = new Semaphore(1);
     private final IntBuffer fbWidth = BufferUtils.createIntBuffer(1);
     private final IntBuffer fbHeight = BufferUtils.createIntBuffer(1);
@@ -73,6 +78,8 @@ public final class MirageEarlyWindow {
 
     private String memoryText = "Memory: 0/0MB (0.0%)";
     private String cpuText = "CPU: 0.0%";
+    private volatile io.mirage.loader.LoadProgress.View uiView;
+    private volatile long uiViewAt;
 
     private MirageEarlyWindow() {
     }
@@ -324,11 +331,180 @@ public final class MirageEarlyWindow {
 
         drawMemoryBar(sx, sy);
         drawMemoryText(sx, sy);
-        drawTotalProgress(sx, sy);
-        drawStageSummary(sx, sy);
-        drawStageStepper(sx, sy);
-        drawLogPanel(sx, sy);
+        if (OLD_STEPPER) {
+            drawTotalProgress(sx, sy);
+            drawStageSummary(sx, sy);
+            drawStageStepper(sx, sy);
+            drawLogPanel(sx, sy);
+        } else {
+            io.mirage.loader.LoadProgress.View v = dashboardView();
+            drawSegmentedTotal(sx, sy, v);
+            drawBreadcrumb(sx, sy, v);
+            drawMeters(sx, sy, v);
+            drawCounters(sx, sy, v);
+            drawEvents(sx, sy, v);
+        }
         drawVersion(sx, sy);
+    }
+
+    // ---- 真实进度仪表盘（与主窗口 ForgeStyleOverlay 共用 ForgeStyleLayout 常量 + LoadProgress 数据） ----
+    //
+    // 早期窗口的 y 是「行盒顶」，文字直接用 *_TOP；色块是绝对坐标，不加 EARLY_INK_OFFSET。
+    // EarlyGl 的颜色是 ABGR，所有颜色一律经 abgr(0xRRGGBB) 转换，避免照抄 ARGB 变青（经验 C49）。
+
+    private io.mirage.loader.LoadProgress.View dashboardView() {
+        long now = System.currentTimeMillis();
+        io.mirage.loader.LoadProgress.View v = uiView;
+        if (v == null || now - uiViewAt >= VIEW_SNAPSHOT_MS) {
+            v = io.mirage.loader.LoadProgress.view(ForgeStyleLayout.METER_COUNT,
+                    ForgeStyleLayout.EVENT_VISIBLE_LINES);
+            uiView = v;
+            uiViewAt = now;
+        }
+        return v;
+    }
+
+    /** 0xRRGGBB → 0xAABBGGRR（EarlyGl 的打包顺序）。 */
+    private static int abgr(int rgb) {
+        int r = (rgb >>> 16) & 0xFF;
+        int g = (rgb >>> 8) & 0xFF;
+        int b = rgb & 0xFF;
+        return 0xFF000000 | (b << 16) | (g << 8) | r;
+    }
+
+    private void drawSegmentedTotal(float sx, float sy, io.mirage.loader.LoadProgress.View v) {
+        int top = ForgeStyleLayout.TOTAL_BAR_TOP;
+        int bottom = top + ForgeStyleLayout.TOTAL_BAR_HEIGHT;
+        int x0 = ForgeStyleLayout.barLeft();
+        int x1 = ForgeStyleLayout.barOuterRight();
+        int white = abgr(ForgeStyleLayout.COLOUR_ACTIVE);
+        int red = abgr(ForgeStyleLayout.FORGE_RED);
+        int green = abgr(ForgeStyleLayout.COLOUR_OK);
+        float[] segs = v.segments();
+        int stage = io.mirage.loader.LoadProgress.stageIndex();
+        gl.begin();
+        gl.quad(x0 * sx, x1 * sx, top * sy, bottom * sy, 0, 0, 0, 0, white);
+        gl.quad((x0 + 2) * sx, (x1 - 2) * sx, (top + 2) * sy, (bottom - 2) * sy,
+                0, 0, 0, 0, red);
+        for (int i = 0; i < ForgeStyleLayout.STAGE_COUNT; i++) {
+            int a = ForgeStyleLayout.segmentLeft(i) + 2;
+            int b = ForgeStyleLayout.segmentRight(i) - 2;
+            if (b <= a) continue;
+            float f = segs[i];
+            int colour = i < stage ? green : white;
+            if (f > 0f) {
+                int right = Math.round(a + (b - a) * Math.min(1f, f));
+                gl.quad(a * sx, right * sx, (top + 4) * sy, (bottom - 4) * sy,
+                        0, 0, 0, 0, colour);
+            } else if (f < 0f) {
+                int w = Math.round((b - a) * io.mirage.loader.LoadProgress.CURSOR_FRACTION);
+                int left = Math.round(a + (b - a - w)
+                        * (io.mirage.loader.LoadProgress.cursorLeft(frame)
+                        / (1f - io.mirage.loader.LoadProgress.CURSOR_FRACTION)));
+                gl.quad(left * sx, (left + w) * sx, (top + 4) * sy, (bottom - 4) * sy,
+                        0, 0, 0, 0, white);
+            }
+            if (i > 0) {
+                int sep = ForgeStyleLayout.segmentLeft(i);
+                gl.quad(sep * sx, (sep + 1) * sx, (top + 1) * sy, (bottom - 1) * sy,
+                        0, 0, 0, 0, red);
+            }
+        }
+        gl.draw(EarlyGl.TYPE_BAR, 0);
+        font.drawText(gl, truncate(v.totalLabel(), ForgeStyleLayout.BAR_WIDTH), x0,
+                ForgeStyleLayout.TOTAL_TEXT_TOP, white, sx, sy);
+    }
+
+    private void drawBreadcrumb(float sx, float sy, io.mirage.loader.LoadProgress.View v) {
+        int x0 = ForgeStyleLayout.barLeft();
+        int x1 = ForgeStyleLayout.barOuterRight();
+        gl.begin();
+        gl.quad(x0 * sx, x1 * sx, ForgeStyleLayout.DIVIDER_1_TOP * sy,
+                (ForgeStyleLayout.DIVIDER_1_TOP + 1) * sy, 0, 0, 0, 0,
+                abgr(ForgeStyleLayout.COLOUR_LINE));
+        gl.draw(EarlyGl.TYPE_BAR, 0);
+        font.drawText(gl, v.breadcrumb(), x0, ForgeStyleLayout.BREADCRUMB_TOP,
+                abgr(ForgeStyleLayout.COLOUR_DIM), sx, sy);
+    }
+
+    private void drawMeters(float sx, float sy, io.mirage.loader.LoadProgress.View v) {
+        java.util.List<io.mirage.loader.LoadProgress.Snapshot> meters = v.meters();
+        int white = abgr(ForgeStyleLayout.COLOUR_ACTIVE);
+        int red = abgr(ForgeStyleLayout.FORGE_RED);
+        int green = abgr(ForgeStyleLayout.COLOUR_OK);
+        int x0 = ForgeStyleLayout.barLeft();
+        int x1 = ForgeStyleLayout.barOuterRight();
+        for (int i = 0; i < ForgeStyleLayout.METER_COUNT; i++) {
+            int top = ForgeStyleLayout.meterBarTop(i);
+            int bottom = top + ForgeStyleLayout.METER_BAR_HEIGHT;
+            gl.begin();
+            gl.quad(x0 * sx, x1 * sx, top * sy, bottom * sy, 0, 0, 0, 0, white);
+            gl.quad((x0 + 2) * sx, (x1 - 2) * sx, (top + 2) * sy, (bottom - 2) * sy,
+                    0, 0, 0, 0, red);
+            if (i < meters.size()) {
+                io.mirage.loader.LoadProgress.Snapshot s = meters.get(i);
+                if (s.indeterminate()) {
+                    int a = ForgeStyleLayout.barFillLeft();
+                    int w = Math.round(ForgeStyleLayout.BAR_WIDTH
+                            * io.mirage.loader.LoadProgress.CURSOR_FRACTION);
+                    int left = a + Math.round(ForgeStyleLayout.BAR_WIDTH
+                            * io.mirage.loader.LoadProgress.cursorLeft(frame));
+                    gl.quad(left * sx, (left + w) * sx, (top + 4) * sy, (bottom - 4) * sy,
+                            0, 0, 0, 0, white);
+                } else if (s.fraction() > 0f) {
+                    int right = ForgeStyleLayout.barFillRight(s.fraction());
+                    gl.quad(ForgeStyleLayout.barFillLeft() * sx, right * sx,
+                            (top + 4) * sy, (bottom - 4) * sy, 0, 0, 0, 0, white);
+                }
+            }
+            gl.draw(EarlyGl.TYPE_BAR, 0);
+            if (i >= meters.size()) continue;
+            io.mirage.loader.LoadProgress.Snapshot s = meters.get(i);
+            String head = io.mirage.loader.LoadProgress.meterHead(s);
+            String tail = io.mirage.loader.LoadProgress.meterTail(s);
+            int labelTop = ForgeStyleLayout.meterLabelTop(i);
+            font.drawText(gl, truncate(head, ForgeStyleLayout.BAR_WIDTH / 2), x0,
+                    labelTop, white, sx, sy);
+            font.drawText(gl, tail, x1 - font.stringWidth(tail),
+                    labelTop, green, sx, sy);
+        }
+    }
+
+    private void drawCounters(float sx, float sy, io.mirage.loader.LoadProgress.View v) {
+        int x0 = ForgeStyleLayout.barLeft();
+        int x1 = ForgeStyleLayout.barOuterRight();
+        gl.begin();
+        gl.quad(x0 * sx, x1 * sx, ForgeStyleLayout.DIVIDER_2_TOP * sy,
+                (ForgeStyleLayout.DIVIDER_2_TOP + 1) * sy, 0, 0, 0, 0,
+                abgr(ForgeStyleLayout.COLOUR_LINE));
+        gl.draw(EarlyGl.TYPE_BAR, 0);
+        font.drawText(gl, v.counter1(), x0, ForgeStyleLayout.COUNTER_TOP,
+                abgr(ForgeStyleLayout.COLOUR_ACTIVE), sx, sy);
+        font.drawText(gl, v.counter2(), x0,
+                ForgeStyleLayout.COUNTER_TOP + ForgeStyleLayout.COUNTER_ROW_H,
+                abgr(ForgeStyleLayout.COLOUR_DIM), sx, sy);
+    }
+
+    private void drawEvents(float sx, float sy, io.mirage.loader.LoadProgress.View v) {
+        int panelTop = ForgeStyleLayout.EVENT_PANEL_TOP;
+        gl.begin();
+        gl.quad(8 * sx, (DESIGN_WIDTH - 8) * sx, panelTop * sy, DESIGN_HEIGHT * sy,
+                0, 0, 0, 0, abgr(ForgeStyleLayout.COLOUR_PANEL));
+        gl.draw(EarlyGl.TYPE_BAR, 0);
+        font.drawText(gl, "事件 · " + io.mirage.loader.LoadProgress.EVENT_CAPACITY + " 缓冲",
+                12, ForgeStyleLayout.EVENT_HEADER_TOP, abgr(ForgeStyleLayout.COLOUR_DIM), sx, sy);
+        java.util.List<String> lines = v.eventLines();
+        int maxTextW = DESIGN_WIDTH - 2 * 8 - 8;
+        for (int i = 0; i < ForgeStyleLayout.EVENT_VISIBLE_LINES && i < lines.size(); i++) {
+            String raw = lines.get(i);
+            int colour = raw.startsWith("[ERROR]") ? ForgeStyleLayout.COLOUR_FAIL
+                    : raw.startsWith("[WARN]") ? ForgeStyleLayout.COLOUR_WARN
+                    : raw.startsWith("[STAGE]") ? ForgeStyleLayout.COLOUR_OK
+                    : ForgeStyleLayout.COLOUR_DIM;
+            font.drawText(gl, truncate(raw, maxTextW), 12,
+                    ForgeStyleLayout.EVENT_LINE_TOP + i * ForgeStyleLayout.EVENT_LINE_H,
+                    abgr(colour), sx, sy);
+        }
     }
 
     private void drawMemoryBar(float sx, float sy) {
