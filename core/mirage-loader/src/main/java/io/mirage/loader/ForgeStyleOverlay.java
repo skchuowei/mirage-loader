@@ -57,6 +57,15 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 把灰度烘进 RGB 就不依赖 blend，而淡入淡出的整体 alpha 仍照旧由 {@code pack(alpha, rgb)} 承担。
  * 三条约束一个没松：禁用 {@code gge.text()}、渲染线程零 AWT、字符级预渲染只在 {@link #prewarm()}。
  *
+ * <h2>2026-11-07 三修：与早期窗口 1:1 同源字形</h2>
+ * 上一修把 ASCII 字体换成了系统 UI 无衬线（Segoe UI / 雅黑 UI），实机两张截图显示
+ * <b>两个窗口风格不一致</b>：早期窗口是 {@code EarlyFont} 用 STB 打包的
+ * {@code Monocraft.ttf} 细等宽字形 + {@code msyh.ttc} 中文，本窗口却成了加粗圆润的无衬线。
+ * 现把字体源集中到 {@link LoadingFonts}：ASCII 读同一个 {@code /Monocraft.ttf}
+ * （AWT 光栅化，仍走上面的抗锯齿灰度管线）、CJK 读 {@code LoadingFonts.findCjkFont()}
+ * 给的同一个文件（TTC 第 0 个，与 STB 的 {@code cjkFontIndex=0} 一致）。
+ * 两条渲染管线不同（GL 纹理 quad vs AWT + fill），但字形同源；<b>布局常量一字未动</b>。
+ *
  * <h2>2026-10-31 二次修复：渲染线程绝不允许碰 AWT（字符级预渲染）</h2>
  * 第一版把光栅化直接放在 {@code draw()} 里同步做，结果窗口「未响应」+ 日志被抢写——
  * 根因是<b>渲染线程每帧都在跑 Java2D 字体管线</b>（每帧重新光栅化、反射 fill 几百次），
@@ -199,8 +208,9 @@ public final class ForgeStyleOverlay {
                 }
             }
             glyphReady = true;
-            MirageLog.MIRAGE.debug("加载界面抗锯齿字预渲染完成："
-                    + GLYPH_CACHE.size() + " 个字符字形（GUI " + GUI_TEXT_PX + "px / " + (GUI_TEXT_PX - 1) + "px）");
+            MirageLog.MIRAGE.debug("加载界面字形预渲染完成（与早期窗口同源 "
+                    + LoadingFonts.ASCII_RESOURCE + "）：" + GLYPH_CACHE.size()
+                    + " 个字符字形（GUI " + GUI_TEXT_PX + "px / " + (GUI_TEXT_PX - 1) + "px）");
         } catch (Throwable t) {
             textUnavailable = true;
             MirageLog.MIRAGE.warn("加载界面文字不可用，后续只画进度条", t);
@@ -664,8 +674,17 @@ public final class ForgeStyleOverlay {
         return base.getSize() == px ? base : base.deriveFont((float) px);
     }
 
-    /** 取中文字体：优先系统微软雅黑，否则回退到默认（可能无汉字字形，汉字会变空白）。 */
+    /**
+     * 取中文字体：与早期窗口 1:1 同源，先按 {@link LoadingFonts#findCjkFont()} 的绝对路径
+     * 用 {@code Font.createFont} 加载<b>同一个字体文件</b>（TTC 取第 0 个，与 STB 的
+     * {@code cjkFontIndex=0} 一致）；文件不可用才回退系统家族名。
+     */
     private static Font pickCjkFont(int px) {
+        String path = LoadingFonts.findCjkFont();
+        if (path != null) {
+            Font fromFile = fontFromFile(path, px);
+            if (fromFile != null) return fromFile;
+        }
         String[] cands = {"Microsoft YaHei", "SimSun", "SimHei", "PingFang SC",
                 "Noto Sans CJK SC", "Source Han Sans SC", "SansSerif"};
         try {
@@ -683,6 +702,38 @@ public final class ForgeStyleOverlay {
             // 拿不到字体列表就走 SANS_SERIF 兜底
         }
         return new Font(Font.SANS_SERIF, Font.PLAIN, px);
+    }
+
+    /**
+     * 只在 {@link #prewarm()}（主线程）里调用：从 classpath 资源加载字体。
+     * 生产环境这份资源在 fat jar 根；离线回归把同一份文件放在 classes 根。
+     */
+    private static Font fontFromResource(String resource, int px) {
+        try {
+            java.io.InputStream in = ForgeStyleOverlay.class.getResourceAsStream(resource);
+            if (in == null) {
+                String bare = resource.startsWith("/") ? resource.substring(1) : resource;
+                in = ClassLoader.getSystemResourceAsStream(bare);
+            }
+            if (in == null) return null;
+            try (java.io.InputStream stream = in) {
+                return Font.createFont(Font.TRUETYPE_FONT, stream).deriveFont((float) px);
+            }
+        } catch (Throwable t) {
+            MirageLog.MIRAGE.warn("加载界面内置字体不可用，回退系统字体: " + resource, t);
+            return null;
+        }
+    }
+
+    /** 只在 {@link #prewarm()}（主线程）里调用：从绝对路径加载中文字体文件。 */
+    private static Font fontFromFile(String path, int px) {
+        try {
+            return Font.createFont(Font.TRUETYPE_FONT, new java.io.File(path))
+                    .deriveFont((float) px);
+        } catch (Throwable t) {
+            MirageLog.MIRAGE.warn("加载界面中文字体不可用，回退系统家族名: " + path, t);
+            return null;
+        }
     }
 
     /**
@@ -776,7 +827,8 @@ public final class ForgeStyleOverlay {
         if (mask == null) return;
         if (!textDrawnLogged) {
             textDrawnLogged = true;
-            MirageLog.MIRAGE.info("加载界面文字已出图：AWT 抗锯齿灰度字（字符级预渲染 + 按背景预混 + fill 逐块），"
+            MirageLog.MIRAGE.info("加载界面文字已出图：AWT 抗锯齿灰度字（同源 "
+                    + LoadingFonts.ASCII_RESOURCE + " + 字符级预渲染 + 按背景预混 + fill 逐块），"
                     + "字号 " + textPixelSize(sx) + "px，字形缓存 " + GLYPH_CACHE.size() + " 个");
         }
         int alpha = (colour >>> 24) & 0xFF;
@@ -818,17 +870,23 @@ public final class ForgeStyleOverlay {
         return (r << 16) | (g << 8) | b;
     }
 
-    /** 系统 UI 无衬线优先：加载界面不该再是等宽终端点阵风；逐字步进按真实 advance 取。 */
+    /**
+     * 与早期窗口 1:1 同源：ASCII 直接读 {@link LoadingFonts#ASCII_RESOURCE}
+     * （{@code EarlyFont} 用 STB 打包的同一份 {@code Monocraft.ttf}）。
+     * 抗锯齿仍由 {@link MirageDebug#rasterizeSmoothText} 负责，所以字形同源但不退回二值点阵。
+     * 资源缺失时回退系统等宽字体，保证界面仍出字。
+     */
     private static Font pickFont(int px) {
-        String[] preferred = {"Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei",
-                "Noto Sans CJK SC", "Source Han Sans SC"};
+        Font embedded = fontFromResource(LoadingFonts.ASCII_RESOURCE, px);
+        if (embedded != null) return embedded;
+        String[] fallback = {"Consolas", "Cascadia Mono", "Lucida Console", "DejaVu Sans Mono"};
         try {
             Set<String> available = new HashSet<>();
             for (String family : GraphicsEnvironment.getLocalGraphicsEnvironment()
                     .getAvailableFontFamilyNames(Locale.ROOT)) {
                 available.add(family);
             }
-            for (String family : preferred) {
+            for (String family : fallback) {
                 if (available.contains(family)) {
                     return new Font(family, Font.PLAIN, px);
                 }
@@ -836,7 +894,7 @@ public final class ForgeStyleOverlay {
         } catch (Throwable ignored) {
             // 拿不到字体列表就走 MONOSPACED 兜底
         }
-        return new Font(Font.SANS_SERIF, Font.PLAIN, px);
+        return new Font(Font.MONOSPACED, Font.PLAIN, px);
     }
 
     /** 每块绘制的兜底：单个失败只丢自己，不影响其它块。 */

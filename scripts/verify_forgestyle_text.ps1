@@ -33,11 +33,17 @@
 #   于是小矩形里会出现一批**非纯色**（isKnownColour 为 false）的渐变色；二值点阵字时代
 #   这些颜色根本不存在。断言 glyphmixed >= 100 / glyphlevels >= 3，旧形态与新仪表盘各验一遍。
 #
-# 变异检验（脚本内自动跑 4 种，每次复制源码到独立临时目录改一处再编译）：
+# 变异检验（脚本内自动跑 6 种，每次复制全套源码到独立临时目录改一处再编译）：
 #   M1 关掉抗锯齿 / M2 去掉按覆盖率预混 → glyphmixed 归 0，行为断言与源码守卫同时变红；
-#   M3 去掉画布裁剪 → guiScale=2 末行重新出血，overflow 断言变红；
-#   M4 往 drawText 插一行 AWT 引用（纯守卫变异，行为不变）→「渲染线程零 AWT」守卫变红。
-#   原版全绿 + 4 种变异全红才算通过（经验 A7 / C36 / C59）。
+#   M3 去掉画布裁剪（纯守卫变异）→ 裁剪守卫变红，行为按设计不变；
+#   M4 往 drawText 插一行 AWT 引用（纯守卫变异）→「渲染线程零 AWT」守卫变红；
+#   M5 主窗口字体源改回系统字体 → 实际 AWT 字体族断言 + 同源守卫同时变红；
+#   M6 背景块画大 3px → overflow 断言变红（换字形后裁剪不再触发，越界判定需独立验不空转）。
+#   原版全绿 + 6 种变异全红才算通过（经验 A7 / C36 / C59 / C57）。
+#
+# 2026-11-07 补充：两窗口字形改为同源后新增「双窗口字体源」断言段
+#   （反射读实际生效的 AWT 字体族，证明 /Monocraft.ttf 真的被加载），
+#   classpath 里也要放同一份 Monocraft.ttf，否则会走回退分支。
 
 [CmdletBinding()]
 param(
@@ -54,6 +60,7 @@ $files = @{
     "LoadProgress.java"      = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\LoadProgress.java"
     "MirageDebug.java"       = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\MirageDebug.java"
     "ForgeStyleLayout.java"  = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\ForgeStyleLayout.java"
+    "LoadingFonts.java"      = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\LoadingFonts.java"
     "ForgeStyleOverlay.java" = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\ForgeStyleOverlay.java"
 }
 foreach ($k in $files.Keys) {
@@ -61,6 +68,19 @@ foreach ($k in $files.Keys) {
         Write-Host "[FAIL] 找不到源码: $($files[$k])" -ForegroundColor Red
         exit 1
     }
+}
+# 生产里 /Monocraft.ttf 由 fat jar 提供；离线回归把同一份文件放进 classes 根，
+# 让 ForgeStyleOverlay.fontFromResource 走的是真实生产路径，而不是回退系统字体。
+$fontRes = Join-Path $root "launcher\mirage-launch\src\main\resources\Monocraft.ttf"
+if (-not (Test-Path $fontRes)) {
+    Write-Host "[FAIL] 找不到内置字体资源: $fontRes" -ForegroundColor Red
+    exit 1
+}
+# 早期窗口源码（只读，用于「双窗口同源」守卫）
+$earlySrc = Join-Path $root "launcher\mirage-launch\src\main\java\io\mirage\earlydisplay\MirageEarlyWindow.java"
+if (-not (Test-Path $earlySrc)) {
+    Write-Host "[FAIL] 找不到早期窗口源码: $earlySrc" -ForegroundColor Red
+    exit 1
 }
 
 # ---------------------------------------------------------------- 工具链定位
@@ -181,6 +201,26 @@ public final class ForgeStyleTextCheck {
         // 预渲染字符字形（同步、主线程）—— 与生产环境 Launcher.main 调用 prewarm() 一致。
         // 字符级方案下 glyph 缓存必须先就绪，draw 才查得到字、首帧即有字。
         ForgeStyleOverlay.prewarm();
+        // 证明主窗口「实际生效」的 ASCII 字体就是 /Monocraft.ttf，而不是回退到系统字体。
+        // 反射读私有缓存字段；离线 classpath 全在 unnamed module，setAccessible 有效。
+        // 这比静态源码守卫强：资源没进 classpath / createFont 失败时这里会立刻露出回退族名。
+        try {
+            java.lang.reflect.Field fa = ForgeStyleOverlay.class.getDeclaredField("baseFont");
+            fa.setAccessible(true);
+            java.awt.Font base = (java.awt.Font) fa.get(null);
+            System.out.println("STAT font.ascii=" + (base == null ? "none" : base.getFamily(java.util.Locale.ROOT)));
+            java.lang.reflect.Field fc = ForgeStyleOverlay.class.getDeclaredField("cjkBaseFont");
+            fc.setAccessible(true);
+            java.awt.Font cjk = (java.awt.Font) fc.get(null);
+            System.out.println("STAT font.cjk=" + (cjk == null ? "none" : cjk.getFamily(java.util.Locale.ROOT)));
+            System.out.println("STAT font.resource=" + LoadingFonts.ASCII_RESOURCE);
+            System.out.println("STAT font.cjkpath=" + String.valueOf(LoadingFonts.findCjkFont()));
+        } catch (Throwable t) {
+            System.out.println("STAT font.ascii=REFLECT_FAIL:" + t.getClass().getName());
+            System.out.println("STAT font.cjk=none");
+            System.out.println("STAT font.resource=none");
+            System.out.println("STAT font.cjkpath=none");
+        }
         // 造出「加载进行中」的真实状态：没有日志/阶段时，日志面板与摘要带本来就该是空的，
         // 那样「日志带有字」这条断言永远红，等于没测。
         for (int i = 1; i <= 16; i++) {
@@ -442,6 +482,7 @@ $compile = Invoke-Native $javac @(
     $files["LoadProgress.java"],
     $files["MirageDebug.java"],
     $files["ForgeStyleLayout.java"],
+    $files["LoadingFonts.java"],
     $files["ForgeStyleOverlay.java"],
     $harnessSrc
 ) "compile"
@@ -453,6 +494,8 @@ if ($compile.Code -ne 0) {
     exit 1
 }
 Write-Host "   [OK] 编译通过" -ForegroundColor DarkGreen
+Copy-Item -LiteralPath $fontRes -Destination (Join-Path $classes "Monocraft.ttf") -Force
+Write-Host "   [OK] 内置字体已进 classpath: Monocraft.ttf" -ForegroundColor DarkGreen
 
 Write-Host "== 运行检查程序（旧形态 -Dmirage.ui.oldStepper=true / 新仪表盘 默认） ==" -ForegroundColor Cyan
 $baseArgs = @(
@@ -603,6 +646,24 @@ foreach ($tag in @("S1", "S2")) {
     }
 }
 
+# ---------------------------------------------------------------- 双窗口字体源
+# 行为断言：读 harness 反射出的「实际生效」AWT 字体族。资源没进 classpath /
+# createFont 抛错时会露出回退族名，静态源码守卫是看不出来的。
+Write-Host "== 双窗口字体源 ==" -ForegroundColor Cyan
+$joinedNew = $newLines -join "`n"
+$fontAscii = [regex]::Match($joinedNew, "(?m)^STAT font\.ascii=(.*)$").Groups[1].Value
+$fontCjk = [regex]::Match($joinedNew, "(?m)^STAT font\.cjk=(.*)$").Groups[1].Value
+$fontResource = [regex]::Match($joinedNew, "(?m)^STAT font\.resource=(.*)$").Groups[1].Value
+$fontCjkPath = [regex]::Match($joinedNew, "(?m)^STAT font\.cjkpath=(.*)$").Groups[1].Value
+Assert-True ($fontAscii -eq "Monocraft") `
+    "主窗口实际生效的 ASCII 字体 = Monocraft（实际 '$fontAscii'）"
+Assert-True ($fontCjk -ne "" -and $fontCjk -ne "none" -and -not $fontCjk.StartsWith("REFLECT_FAIL")) `
+    "主窗口 CJK 字体已从文件加载（实际 '$fontCjk'）"
+Assert-True ($fontResource -eq "/Monocraft.ttf") `
+    "共享常量 ASCII_RESOURCE = /Monocraft.ttf（实际 '$fontResource'）"
+Assert-True ($fontCjkPath -ne "" -and $fontCjkPath -ne "none" -and (Test-Path $fontCjkPath)) `
+    "共享 CJK 字体路径存在（实际 '$fontCjkPath'）"
+
 # ---------------------------------------------------------------- 源码守卫
 # 这条是给未来的自己看的：LoadingOverlay 阶段用 text() 必然静默无字，
 # 源码里只要重新出现 drawTextSafe / 解析 name=text 的反射，就说明这段又被改回去了。
@@ -630,10 +691,28 @@ $drawBody = [regex]::Match($overlaySrc,
 Assert-True ($drawBody.Length -gt 0 -and -not ($drawBody -match "createGraphics|Graphics2D|getFontMetrics|new Font")) `
     "drawText 方法体内零 AWT（渲染线程只查字形缓存）"
 
+# 双窗口 1:1 同源：字体源必须由同一个常量类给出，而不是两边各写一份路径。
+# 正则一律行首锚定 —— Javadoc / 注释里出现同名文本不算「接线还在」（经验 C59/C61）。
+$fontsSrc = Get-Content $files["LoadingFonts.java"] -Raw -Encoding UTF8
+$earlyText = Get-Content $earlySrc -Raw -Encoding UTF8
+Assert-True ($fontsSrc -match '(?m)^\s*public static final String ASCII_RESOURCE = "/Monocraft\.ttf";') `
+    "LoadingFonts 常量指向 /Monocraft.ttf（行首锚定）"
+Assert-True ($overlaySrc -match '(?m)^\s*Font embedded = fontFromResource\(LoadingFonts\.ASCII_RESOURCE, px\);') `
+    "主窗口 ASCII 读共享常量（行首锚定，注释不算）"
+Assert-True ($overlaySrc -match '(?m)^\s*String path = LoadingFonts\.findCjkFont\(\);') `
+    "主窗口 CJK 走共享查找逻辑（行首锚定）"
+Assert-True ($earlyText -match '(?m)^\s*font = new EarlyFont\(io\.mirage\.loader\.LoadingFonts\.ASCII_RESOURCE, 0,') `
+    "早期窗口 ASCII 读同一个共享常量（行首锚定）"
+Assert-True ($earlyText -match '(?m)^\s*io\.mirage\.loader\.LoadingFonts\.findCjkFont\(\),') `
+    "早期窗口 CJK 走同一个共享查找逻辑（行首锚定）"
+Assert-True ($earlyText -match '(?m)^\s*return io\.mirage\.loader\.LoadingFonts\.findCjkFont\(\);') `
+    "早期窗口本地 findCjkFont 收成委托（行首锚定）"
+
 # ---------------------------------------------------------------- 变异检验
-# 每次把 6 个源码复制到独立临时目录、只改一处，重新编译并跑同一个 harness。
+# 每次把全套源码复制到独立临时目录、只改一处，重新编译并跑同一个 harness。
 # 原版全绿不算数：必须证明「改坏一个点就变红」，否则断言是空转（经验 A7 / C36 / C59）。
-# 其中 M4 是纯守卫变异（行为不变），专门验证「渲染线程零 AWT」那条守卫本身没空转。
+# M3/M4 是纯守卫变异（行为按设计不变），专门验证守卫本身没空转；这类变异跳过
+# 「行为断言必须红」的要求，否则会诱导人把变异改坏到刚好红，反而背离 C57。
 
 Write-Host "== 变异检验 ==" -ForegroundColor Cyan
 
@@ -651,16 +730,36 @@ $mutations = @(
         Kind = "mixed"; Guard = "coverage >= 4 \? fg : blend\(backdrop, fg, coverage\)"; GuardIn = "overlay"
     },
     [pscustomobject]@{
-        Tag = "M3"; Desc = "去掉画布裁剪"; File = "ForgeStyleOverlay.java"
+        # 2026-11-07：换成 Monocraft 后字形盒矮 1~2px，所有字块天然落在画布内，
+        # 裁剪分支一次都不触发 ⇒ 任何「改坏裁剪」的变异都不改变行为，是断言跟随数据变化的假绿。
+        # 裁剪代码是纯防御兜底，故降级为**纯守卫变异**（只验证守卫不空转），
+        # 越界行为断言改由 M6 制造真实越界来验（经验 C57 / C61）。
+        Tag = "M3"; Desc = "去掉画布裁剪（纯守卫变异）"; File = "ForgeStyleOverlay.java"
         Old = "            if (py1 > canvasH) py1 = canvasH;"
         New = "            // 变异：故意不裁剪 y"
-        Kind = "overflow"; Guard = "(?m)^\s*if \(py1 > canvasH\) py1 = canvasH;"; GuardIn = "overlay"
+        Kind = "overflow"; PureGuard = $true
+        Guard = "(?m)^\s*if \(py1 > canvasH\) py1 = canvasH;"; GuardIn = "overlay"
     },
     [pscustomobject]@{
         Tag = "M4"; Desc = "渲染线程碰 AWT（纯守卫变异）"; File = "ForgeStyleOverlay.java"
         Old = "        int alpha = (colour >>> 24) & 0xFF;"
         New = "        java.awt.Graphics2D dummy = null;`n        int alpha = (colour >>> 24) & 0xFF;"
         Kind = "awt"; Guard = ""; GuardIn = ""
+    },
+    [pscustomobject]@{
+        # 本轮核心变异：主窗口偷偷改回系统字体时，行为断言（实际字体族）与源码守卫都要红。
+        Tag = "M5"; Desc = "主窗口字体源改回系统字体（破坏同源）"; File = "ForgeStyleOverlay.java"
+        Old = "        Font embedded = fontFromResource(LoadingFonts.ASCII_RESOURCE, px);"
+        New = "        Font embedded = null; // 变异：故意不用同源字体"
+        Kind = "font"; Guard = '(?m)^\s*Font embedded = fontFromResource\(LoadingFonts\.ASCII_RESOURCE, px\);'; GuardIn = "overlay"
+    },
+    [pscustomobject]@{
+        # 换字形后裁剪分支不再被触发，越界断言需要独立证明不空转：
+        # 把全屏背景块画大 3px，harness 的 overflow 统计必须红。
+        Tag = "M6"; Desc = "背景块越界（验证 overflow 断言不空转）"; File = "ForgeStyleOverlay.java"
+        Old = "MirageDebug.fillRect(gge, fill, 0, 0, gw, gh,"
+        New = "MirageDebug.fillRect(gge, fill, 0, 0, gw + 3, gh + 3,"
+        Kind = "overflow"; Guard = '(?m)^\s*step\("背景", \(\) -> MirageDebug\.fillRect\(gge, fill, 0, 0, gw, gh,'; GuardIn = "overlay"
     }
 )
 
@@ -668,6 +767,9 @@ foreach ($m in $mutations) {
     $dir = Join-Path $work ("mut-" + $m.Tag)
     $mClasses = Join-Path $dir "classes"
     New-Item -ItemType Directory -Force -Path $mClasses | Out-Null
+    # 变异版也必须能读到内置字体，否则所有变异都会一起走「回退系统字体」分支，
+    # 行为数据失真，M5 之外的变异就变成假红/假绿。
+    Copy-Item -LiteralPath $fontRes -Destination (Join-Path $mClasses "Monocraft.ttf") -Force
     foreach ($k in $files.Keys) {
         Copy-Item -LiteralPath $files[$k] -Destination (Join-Path $dir $k) -Force
     }
@@ -707,8 +809,18 @@ foreach ($m in $mutations) {
                 '(?s)private static void drawText\(Object gge, Method fill, String text, int x, int y,\s*float sx, int colour, int backdrop\).*?\n    \}').Value
             $behaviourRed = ($body -match "Graphics2D")
         }
+        "font"     {
+            $fa = [regex]::Match($run.Out, "(?m)^STAT font\.ascii=(.*)$").Groups[1].Value
+            $behaviourRed = ($fa -ne "" -and $fa -ne "Monocraft")
+        }
     }
-    Assert-True $behaviourRed "$($m.Tag) $($m.Desc)：断言被抓红（glyphmixed=$gm, overflow=$ov）"
+    if ($m.PureGuard) {
+        # 纯守卫变异：行为数据按设计不变，判定权交给下面的 Guard 检查。
+        # 若这里也要求行为变红，就会逼着人去「改坏到断言红」，那是 C57 明令禁止的假绿思路。
+        Write-Host "   [OK]   $($m.Tag) 纯守卫变异：行为按设计不变，靠下方守卫检查" -ForegroundColor DarkGreen
+    } else {
+        Assert-True $behaviourRed "$($m.Tag) $($m.Desc)：断言被抓红（glyphmixed=$gm, overflow=$ov）"
+    }
 
     if ($m.Guard -ne "") {
         $guardSrc = if ($m.GuardIn -eq "debug") { $mutDebug } else { $mutOverlay }

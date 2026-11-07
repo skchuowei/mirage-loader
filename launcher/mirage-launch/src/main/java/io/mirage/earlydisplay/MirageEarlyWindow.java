@@ -264,7 +264,9 @@ public final class MirageEarlyWindow {
         gl = new EarlyGl();
         gl.init();
         // 汉字全集 = UI 用字（两窗口共用）+ 日志用字（日志面板要显示真实中文日志）
-        font = new EarlyFont("/Monocraft.ttf", 0, findCjkFont(),
+        // 字体源与主窗口共用同一份常量/查找逻辑（LoadingFonts），保证两窗口 1:1 同源。
+        font = new EarlyFont(io.mirage.loader.LoadingFonts.ASCII_RESOURCE, 0,
+                io.mirage.loader.LoadingFonts.findCjkFont(),
                 MirageDebug.LOADING_CJK_SOURCE + MirageDebug.LOADING_CJK_LOG_SOURCE);
 
         glEnable(GL_BLEND);
@@ -655,19 +657,27 @@ public final class MirageEarlyWindow {
     private long handoff(int width, int height, CharSequence title, long monitor, long share) {
         handedOff = true;
         boolean locked = false;
-        // 性能埋点：早期窗口交接含两次「等」——renderLock（≤3s）与渲染线程终止（≤2s），
-        // 合计最多 5s。实测 S7 阶段里交接占了好几秒，必须分开量才知道等的是哪一段。
+        // 性能埋点：交接含两次「等」——renderLock 与渲染线程终止，分开量才知道等的是哪一段。
+        //
+        // 旧实现是 tryAcquire(3s) + awaitTermination(2s) 两段纯阻塞，合计 5s；而 handedOff
+        // 置位后渲染任务随即被 cancel、不再调用 glfwPollEvents()，交接线程自己又卡在阻塞里
+        // 不抽窗口消息 —— 正好踩中 Windows 判定「未响应」的阈值（实机反馈：交接时卡住）。
+        // 现改走 HandoffPump.await：每 10ms 由本线程（创建窗口的主线程）抽一次消息，
+        // 并把两段等待上限压到 800ms / 500ms（一帧渲染约 50ms，足够宽裕）。
         io.mirage.loader.MiragePerf.mark("early.handoff.begin");
         try {
-            locked = renderLock.tryAcquire(3, TimeUnit.SECONDS);
-            io.mirage.loader.MiragePerf.mark("early.handoff.lock");
             if (renderTask != null) renderTask.cancel(false);
+            locked = HandoffPump.await(800, renderLock::tryAcquire, GLFW::glfwPollEvents);
+            io.mirage.loader.MiragePerf.mark("early.handoff.lock");
+            if (!locked) {
+                MirageLog.MIRAGE.warn("早期窗口交接：800ms 未取得 renderLock（继续交接，GL 上下文可能竞态）");
+            }
             if (scheduler != null) {
                 scheduler.shutdownNow();
-                try {
-                    scheduler.awaitTermination(2, TimeUnit.SECONDS);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
+                boolean terminated = HandoffPump.await(500, scheduler::isTerminated,
+                        GLFW::glfwPollEvents);
+                if (!terminated) {
+                    MirageLog.MIRAGE.warn("早期窗口交接：渲染线程 500ms 内未退出（继续交接）");
                 }
             }
             io.mirage.loader.MiragePerf.mark("early.handoff.thread");
@@ -759,37 +769,12 @@ public final class MirageEarlyWindow {
         return t + "...";
     }
 
+    /**
+     * 与 {@link io.mirage.loader.LoadingFonts} 共用候选表：主窗口 AWT 与早期窗口 STB
+     * 必须读到同一个中文字体文件，否则两边字形会不同（见 LoadingFonts 类注释）。
+     */
     private static String findCjkFont() {
-        String[] candidates = {
-                "C:/Windows/Fonts/msyh.ttc",
-                "C:/Windows/Fonts/msyhbd.ttc",
-                "C:/Windows/Fonts/simsun.ttc",
-                "C:/Windows/Fonts/simhei.ttf",
-                "C:/Windows/Fonts/msjh.ttc",
-                "/System/Library/Fonts/PingFang.ttc",
-                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
-        };
-        for (String p : candidates) {
-            if (new File(p).isFile()) return p;
-        }
-        File dir = new File("C:/Windows/Fonts");
-        if (dir.isDirectory()) {
-            String[] names = dir.list();
-            if (names != null) {
-                for (String name : names) {
-                    String lower = name.toLowerCase(Locale.ROOT);
-                    if (lower.endsWith(".ttc") || lower.endsWith(".ttf") || lower.endsWith(".otf")) {
-                        if (lower.contains("msyh") || lower.contains("sim") || lower.contains("yahei")
-                                || lower.contains("noto") || lower.contains("cjk") || lower.contains("hei")
-                                || lower.contains("song") || lower.contains("pingfang")
-                                || lower.contains("wenquan") || lower.contains("source")) {
-                            return new File(dir, name).getAbsolutePath();
-                        }
-                    }
-                }
-            }
-        }
-        return null;
+        return io.mirage.loader.LoadingFonts.findCjkFont();
     }
 
 

@@ -216,14 +216,20 @@ if ($missingJar) {
     $cjkFile = Join-Path $work "cjk.txt"
     [System.IO.File]::WriteAllText($cjkFile, $cjk, (New-Object System.Text.UTF8Encoding($false)))
 
-    # 字体：跟随生产 findCjkFont 的候选顺序，取第一个存在的
+    # 字体：2026-11-07 起候选表集中到 LoadingFonts.findCjkFont()（两窗口共用），
+    # 早期窗口本地方法只留一行委托。这里必须显式断言委托还在 —— 否则候选表再搬一次家，
+    # 脚本会继续抽旧文件、抽到空列表，然后「找不到字体」这个 FAIL 看起来像环境问题（C44）。
+    $fontsSrc = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\LoadingFonts.java"
     $earlyWin = Join-Path $root "launcher\mirage-launch\src\main\java\io\mirage\earlydisplay\MirageEarlyWindow.java"
+    $fontSrcText = Get-Content -Raw -Encoding UTF8 $fontsSrc
     $winSrc = Get-Content -Raw -Encoding UTF8 $earlyWin
+    Assert-True ($winSrc -match '(?m)^\s*return io\.mirage\.loader\.LoadingFonts\.findCjkFont\(\);') `
+        "早期窗口 findCjkFont 委托给共享 LoadingFonts（行首锚定）"
     $fontPath = ""
-    foreach ($c in [regex]::Matches($winSrc, '"(C:/Windows/Fonts/[^"]+)"')) {
+    foreach ($c in [regex]::Matches($fontSrcText, '"(C:/Windows/Fonts/[^"]+)"')) {
         if (Test-Path $c.Groups[1].Value) { $fontPath = $c.Groups[1].Value; break }
     }
-    Assert-True ($fontPath -ne "") "找到系统中文字体（候选顺序取自 findCjkFont）"
+    Assert-True ($fontPath -ne "") "找到系统中文字体（候选顺序取自 LoadingFonts.findCjkFont）"
     Info "字体 = $fontPath"
 
     if ($fontPath -ne "") {
