@@ -201,7 +201,10 @@ public final class RegistryWindow {
                 Object id = idFactory.invoke(null, dr.modId(), e.getKey());
                 // CreativeModeTab.Builder.build() 不自动 setId，没有 intrusive holder，
                 // MappedRegistry.register 会断言失败。手动创建 intrusive holder 塞进去。
-                if ("creativemodetab".equals(path)) {
+                // 注意：registryPath() 可能是蛇形 creative_mode_tab，也可能是简单名小写
+                // creativemodetab，必须经 RegistryPaths 归一后比较（已知 bug #3：旧代码只比
+                // 后一种形态且从未命中，导致 expore 创造标签页一直注册失败）。
+                if (RegistryPaths.isCreativeModeTab(path)) {
                     try {
                         Class<?> holderRefCls = Class.forName("net.minecraft.core.Holder$Reference", true, mcl);
                         Method createIntrusive = holderRefCls
@@ -216,7 +219,7 @@ public final class RegistryWindow {
                 // BlockItem 构造不自动绑 block.item，手动反射绑定，否则 block.asItem()=AIR
                 // 导致 creative tab 构建时 new ItemStack(AIR) count=0 崩溃
                 try {
-                    if ("item".equals(path)) {
+                    if (RegistryPaths.isItem(path)) {
                         Class<?> blockItemCls = Class.forName("net.minecraft.world.item.BlockItem", true, mcl);
                         if (blockItemCls.isInstance(value)) {
                             Field bf = blockItemCls.getDeclaredField("block");
