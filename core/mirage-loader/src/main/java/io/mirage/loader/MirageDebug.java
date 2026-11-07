@@ -595,6 +595,96 @@ public final class MirageDebug {
         return out;
     }
 
+    /**
+     * 抗锯齿灰度字形：返回 {@code [宽, 高, (x, y, w, h, coverage)×n]}。
+     *
+     * <p>与 {@link #rasterizePixelText} 的区别（2026-11-07，用户否决主加载界面的点阵字）：
+     * <ol>
+     *   <li>{@code VALUE_TEXT_ANTIALIAS_ON} + {@code VALUE_RENDER_QUALITY}，字形边缘是灰度过渡，
+     *       不是 {@code alpha>=80} 一刀切的二值点阵；</li>
+     *   <li>每个像素的覆盖率按 {@code ceil(alpha/64)} 量化到 1..4 档（{@code alpha<16} 的噪声丢弃），
+     *       跟随矩形一起返回，绘制端按档与背景混色；</li>
+     *   <li>同档相邻像素合成水平 run，上下两行同 x/宽/档的 run 再合成竖向块 —— 档位量化
+     *       正是为了把 fill 次数压在与原二值方案同一量级，避免渲染线程被反射调用拖垮。</li>
+     * </ol>
+     *
+     * <p>只在 {@code ForgeStyleOverlay.prewarm()} / {@code rasterizeChar()}（非渲染线程）里调用。
+     * HUD 的 {@link #pixelText} 仍走旧的 {@link #rasterizePixelText}，不受影响。
+     */
+    static int[] rasterizeSmoothText(String text, java.awt.Font font) {
+        java.awt.image.BufferedImage probe =
+                new java.awt.image.BufferedImage(1, 1, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        java.awt.Graphics2D pg = probe.createGraphics();
+        pg.setFont(font);
+        java.awt.FontMetrics fm = pg.getFontMetrics();
+        int width = Math.max(1, fm.stringWidth(text));
+        int height = Math.max(1, fm.getAscent() + fm.getDescent());
+        pg.dispose();
+
+        java.awt.image.BufferedImage img =
+                new java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        java.awt.Graphics2D g = img.createGraphics();
+        g.setFont(font);
+        g.setColor(java.awt.Color.WHITE);
+        g.setRenderingHint(java.awt.RenderingHints.KEY_TEXT_ANTIALIASING,
+                java.awt.RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        g.setRenderingHint(java.awt.RenderingHints.KEY_RENDERING,
+                java.awt.RenderingHints.VALUE_RENDER_QUALITY);
+        g.drawString(text, 0, fm.getAscent());
+        g.dispose();
+
+        java.util.List<int[]> quads = new java.util.ArrayList<>();
+        java.util.List<Integer> prevRow = new java.util.ArrayList<>();
+        for (int yy = 0; yy < height; yy++) {
+            java.util.List<Integer> curRow = new java.util.ArrayList<>();
+            int xx = 0;
+            while (xx < width) {
+                int a = (img.getRGB(xx, yy) >>> 24) & 0xFF;
+                int level = a < 16 ? 0 : Math.min(4, (a + 63) / 64);
+                if (level == 0) {
+                    xx++;
+                    continue;
+                }
+                int start = xx;
+                while (xx < width) {
+                    int an = (img.getRGB(xx, yy) >>> 24) & 0xFF;
+                    int q = an < 16 ? 0 : Math.min(4, (an + 63) / 64);
+                    if (q != level) break;
+                    xx++;
+                }
+                int len = xx - start;
+                boolean merged = false;
+                for (int idx : prevRow) {
+                    int[] quad = quads.get(idx);
+                    if (quad[0] == start && quad[2] == len && quad[4] == level) {
+                        quad[3]++;
+                        curRow.add(idx);
+                        merged = true;
+                        break;
+                    }
+                }
+                if (!merged) {
+                    quads.add(new int[]{start, yy, len, 1, level});
+                    curRow.add(quads.size() - 1);
+                }
+            }
+            prevRow = curRow;
+        }
+
+        int[] out = new int[2 + quads.size() * 5];
+        out[0] = width;
+        out[1] = height;
+        int i = 2;
+        for (int[] q : quads) {
+            out[i++] = q[0];
+            out[i++] = q[1];
+            out[i++] = q[2];
+            out[i++] = q[3];
+            out[i++] = q[4];
+        }
+        return out;
+    }
+
     private static int[] pixelMask(String text) {
         int[] mask = PIXEL_TEXT_CACHE.get(text);
         if (mask == null) {

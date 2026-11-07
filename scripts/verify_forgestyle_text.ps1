@@ -28,9 +28,16 @@
 #
 #   为什么不用实机截图当唯一证据：截图只能证明"这一次没字"，证明不了"以后改回 text() 会被发现"。
 #
-# 变异检验（本轮做过）：
-#   把 drawText 里的 fillRect 循环注释掉 → text.total 变 0、"文字块数量"与"四个区域"断言全红，退出码 1；
-#   恢复后全绿。确认用例不是空转。
+# 2026-11-07 起追加「不是点阵字」的判据：
+#   主窗口改用抗锯齿灰度字形后，每个字块带 1..4 档覆盖率，drawText 按档把前景与背景预混。
+#   于是小矩形里会出现一批**非纯色**（isKnownColour 为 false）的渐变色；二值点阵字时代
+#   这些颜色根本不存在。断言 glyphmixed >= 100 / glyphlevels >= 3，旧形态与新仪表盘各验一遍。
+#
+# 变异检验（脚本内自动跑 4 种，每次复制源码到独立临时目录改一处再编译）：
+#   M1 关掉抗锯齿 / M2 去掉按覆盖率预混 → glyphmixed 归 0，行为断言与源码守卫同时变红；
+#   M3 去掉画布裁剪 → guiScale=2 末行重新出血，overflow 断言变红；
+#   M4 往 drawText 插一行 AWT 引用（纯守卫变异，行为不变）→「渲染线程零 AWT」守卫变红。
+#   原版全绿 + 4 种变异全红才算通过（经验 A7 / C36 / C59）。
 
 [CmdletBinding()]
 param(
@@ -233,18 +240,32 @@ public final class ForgeStyleTextCheck {
         int glyphArea = 0;
         int maxGlyphH = 0;
         int overflow = 0;
+        int mixed = 0;
+        java.util.Set<Integer> mixedColours = new java.util.HashSet<>();
+        java.util.List<String> over = new java.util.ArrayList<>();
         for (Rect r : rects) {
-            if (r.x0 < 0 || r.y0 < 0 || r.x1 > gw || r.y1 > gh) overflow++;
+            if (r.x0 < 0 || r.y0 < 0 || r.x1 > gw || r.y1 > gh) {
+                overflow++;
+                if (over.size() < 6) over.add(r.x0 + "," + r.y0 + "," + r.x1 + "," + r.y1
+                        + ",0x" + Integer.toHexString(r.argb).toUpperCase());
+            }
             if (r.isGlyph()) {
                 glyphs++;
                 glyphArea += r.area();
                 if (r.h() > maxGlyphH) maxGlyphH = r.h();
+                if (!isKnownColour(r.argb)) {
+                    mixed++;
+                    mixedColours.add(r.argb);
+                }
             }
         }
         System.out.println("STAT " + tag + ".glyphs=" + glyphs);
         System.out.println("STAT " + tag + ".glypharea=" + glyphArea);
         System.out.println("STAT " + tag + ".glyphmaxh=" + maxGlyphH);
         System.out.println("STAT " + tag + ".overflow=" + overflow);
+        System.out.println("STAT " + tag + ".overdetail=" + String.join(" | ", over));
+        System.out.println("STAT " + tag + ".glyphmixed=" + mixed);
+        System.out.println("STAT " + tag + ".glyphlevels=" + mixedColours.size());
 
         // ---- 文字带（设计坐标，统一按 sy 换算；容差 ±2px） ----
         int memTop = mc(ForgeStyleLayout.MEMORY_TEXT_TOP);
@@ -330,6 +351,26 @@ public final class ForgeStyleTextCheck {
 
     private static int packAlpha(int rgb) {
         return 0xFF000000 | (rgb & 0xFFFFFF);
+    }
+
+    /**
+     * 界面里直接用的纯色（布局常量 / 日志着色 / 步骤条方块）。
+     * 除此之外出现在「小矩形」里的颜色，只可能是 drawText 按覆盖率与背景预混出来的渐变色 ——
+     * 二值点阵字时代这些颜色根本不存在，所以它们就是「不是像素字」的直接证据。
+     */
+    private static boolean isKnownColour(int argb) {
+        int rgb = argb & 0xFFFFFF;
+        return rgb == ForgeStyleLayout.FORGE_RED
+                || rgb == ForgeStyleLayout.WHITE
+                || rgb == ForgeStyleLayout.COLOUR_OK
+                || rgb == ForgeStyleLayout.COLOUR_WARN
+                || rgb == ForgeStyleLayout.COLOUR_FAIL
+                || rgb == ForgeStyleLayout.COLOUR_DIM
+                || rgb == ForgeStyleLayout.COLOUR_PANEL
+                || rgb == ForgeStyleLayout.COLOUR_LINE
+                || rgb == 0x88FFFF || rgb == 0x141414
+                || rgb == 0xBBBBBB || rgb == 0xAAAAAA || rgb == 0xFF7777 || rgb == 0xFFFF77
+                || rgb == 0x555555 || rgb == 0xCFCFCF || rgb == 0x888888;
     }
 
     private static void band(String tag, String name, List<Rect> rects, double sy,
@@ -440,7 +481,7 @@ Write-Host "-- 旧形态 STAT（摘要）--" -ForegroundColor DarkGray
 $oldLines | Where-Object { $_ -match "\.glyphs=|\.band\.log=|\.stagelast=" } |
     ForEach-Object { Write-Host "   $_" -ForegroundColor DarkGray }
 Write-Host "-- 新仪表盘 STAT（摘要）--" -ForegroundColor DarkGray
-$newLines | Where-Object { $_ -match "\.glyphs=|\.seggreen=|\.metercursor=|\.meterfill=|\.meters=" } |
+$newLines | Where-Object { $_ -match "\.glyphs=|\.seggreen=|\.metercursor=|\.meterfill=|\.meters=|\.overflow=|\.overdetail=|\.glyphmixed=|\.glyphlevels=" } |
     ForEach-Object { Write-Host "   $_" -ForegroundColor DarkGray }
 
 function Stat([string]$tag, [string]$key) {
@@ -483,6 +524,13 @@ foreach ($tag in @("S1", "S2")) {
 
     $overflow = [int](Stat $tag "overflow")
     Assert-True ($overflow -eq 0) "没有任何绘制越出画布（越界块 $overflow 个）"
+
+    # 不是点阵字的直接证据：小矩形里出现「按覆盖率与背景预混」出来的渐变色。
+    # 二值光栅化只输出纯前景色，这里应该恒为 0；关掉抗锯齿 / 去掉 blend 都必须让它变红。
+    $mixed = [int](Stat $tag "glyphmixed")
+    Assert-True ($mixed -ge 100) "旧形态有 $mixed 个抗锯齿渐变字块（二值点阵字应为 0）"
+    $levels = [int](Stat $tag "glyphlevels")
+    Assert-True ($levels -ge 3) "旧形态渐变色档数 >= 3（实际 $levels）"
 
     $memCenter = [int](Stat $tag "memcenter")
     $canvasCenter = [int](Stat $tag "canvascenter")
@@ -528,6 +576,11 @@ foreach ($tag in @("S1", "S2")) {
     $overflow = [int](Stat $tag "overflow")
     Assert-True ($overflow -eq 0) "新形态没有任何绘制越出画布（越界块 $overflow 个）"
 
+    $mixed = [int](Stat $tag "glyphmixed")
+    Assert-True ($mixed -ge 100) "新形态有 $mixed 个抗锯齿渐变字块（二值点阵字应为 0）"
+    $levels = [int](Stat $tag "glyphlevels")
+    Assert-True ($levels -ge 3) "新形态渐变色档数 >= 3（实际 $levels）"
+
     $memCenter = [int](Stat $tag "memcenter")
     $canvasCenter = [int](Stat $tag "canvascenter")
     Assert-True ([math]::Abs($memCenter - $canvasCenter) -le 8) "内存文字仍水平居中（$memCenter vs $canvasCenter）"
@@ -556,12 +609,113 @@ foreach ($tag in @("S1", "S2")) {
 
 Write-Host "== 源码守卫 ==" -ForegroundColor Cyan
 $overlaySrc = Get-Content $files["ForgeStyleOverlay.java"] -Raw -Encoding UTF8
+$debugSrc = Get-Content $files["MirageDebug.java"] -Raw -Encoding UTF8
 Assert-True (-not ($overlaySrc -match "drawTextSafe")) `
     "ForgeStyleOverlay 不再调用 drawTextSafe（text() 在重载期不出图）"
 Assert-True (-not ($overlaySrc -match 'getMethod\("text"')) `
     "ForgeStyleOverlay 不再反射 gge.text(..)"
-Assert-True ($overlaySrc -match "rasterizePixelText") `
-    "ForgeStyleOverlay 走 AWT 光栅化像素字（rasterizePixelText）"
+# 守卫正则一律行首锚定：注释里提到旧方法名不算「接线还在」（经验 C59）。
+Assert-True ($overlaySrc -match "(?m)^\s*int\[\] g = MirageDebug\.rasterizeSmoothText\(") `
+    "ForgeStyleOverlay 生产调用走抗锯齿灰度光栅化（行首锚定）"
+Assert-True (-not ($overlaySrc -match "(?m)^\s*int\[\] g = MirageDebug\.rasterizePixelText\(")) `
+    "ForgeStyleOverlay 生产调用里不再有二值点阵光栅化"
+Assert-True ($debugSrc -match '(?m)^\s*java\.awt\.RenderingHints\.VALUE_TEXT_ANTIALIAS_ON\);') `
+    "rasterizeSmoothText 开启抗锯齿（行首锚定，注释不算；关掉就退回点阵字）"
+Assert-True ($overlaySrc -match "coverage >= 4 \? fg : blend\(backdrop, fg, coverage\)") `
+    "drawText 按覆盖率把前景烘进背景，不依赖 MC 的 alpha 混合"
+Assert-True ($overlaySrc -match "(?m)^\s*if \(py1 > canvasH\) py1 = canvasH;") `
+    "文字块按当前帧画布裁剪（guiScale>1 末行不出血；行首锚定，注释不算）"
+$drawBody = [regex]::Match($overlaySrc,
+    '(?s)private static void drawText\(Object gge, Method fill, String text, int x, int y,\s*float sx, int colour, int backdrop\).*?\n    \}').Value
+Assert-True ($drawBody.Length -gt 0 -and -not ($drawBody -match "createGraphics|Graphics2D|getFontMetrics|new Font")) `
+    "drawText 方法体内零 AWT（渲染线程只查字形缓存）"
+
+# ---------------------------------------------------------------- 变异检验
+# 每次把 6 个源码复制到独立临时目录、只改一处，重新编译并跑同一个 harness。
+# 原版全绿不算数：必须证明「改坏一个点就变红」，否则断言是空转（经验 A7 / C36 / C59）。
+# 其中 M4 是纯守卫变异（行为不变），专门验证「渲染线程零 AWT」那条守卫本身没空转。
+
+Write-Host "== 变异检验 ==" -ForegroundColor Cyan
+
+$mutations = @(
+    [pscustomobject]@{
+        Tag = "M1"; Desc = "关掉抗锯齿（退回二值点阵）"; File = "MirageDebug.java"
+        Old = "java.awt.RenderingHints.VALUE_TEXT_ANTIALIAS_ON"
+        New = "java.awt.RenderingHints.VALUE_TEXT_ANTIALIAS_OFF"
+        Kind = "mixed"; Guard = '(?m)^\s*java\.awt\.RenderingHints\.VALUE_TEXT_ANTIALIAS_ON\);'; GuardIn = "debug"
+    },
+    [pscustomobject]@{
+        Tag = "M2"; Desc = "去掉按覆盖率预混"; File = "ForgeStyleOverlay.java"
+        Old = "int rgb = coverage >= 4 ? fg : blend(backdrop, fg, coverage);"
+        New = "int rgb = fg;"
+        Kind = "mixed"; Guard = "coverage >= 4 \? fg : blend\(backdrop, fg, coverage\)"; GuardIn = "overlay"
+    },
+    [pscustomobject]@{
+        Tag = "M3"; Desc = "去掉画布裁剪"; File = "ForgeStyleOverlay.java"
+        Old = "            if (py1 > canvasH) py1 = canvasH;"
+        New = "            // 变异：故意不裁剪 y"
+        Kind = "overflow"; Guard = "(?m)^\s*if \(py1 > canvasH\) py1 = canvasH;"; GuardIn = "overlay"
+    },
+    [pscustomobject]@{
+        Tag = "M4"; Desc = "渲染线程碰 AWT（纯守卫变异）"; File = "ForgeStyleOverlay.java"
+        Old = "        int alpha = (colour >>> 24) & 0xFF;"
+        New = "        java.awt.Graphics2D dummy = null;`n        int alpha = (colour >>> 24) & 0xFF;"
+        Kind = "awt"; Guard = ""; GuardIn = ""
+    }
+)
+
+foreach ($m in $mutations) {
+    $dir = Join-Path $work ("mut-" + $m.Tag)
+    $mClasses = Join-Path $dir "classes"
+    New-Item -ItemType Directory -Force -Path $mClasses | Out-Null
+    foreach ($k in $files.Keys) {
+        Copy-Item -LiteralPath $files[$k] -Destination (Join-Path $dir $k) -Force
+    }
+    $target = Join-Path $dir $m.File
+    $text = [System.IO.File]::ReadAllText($target, [System.Text.Encoding]::UTF8)
+    if (-not $text.Contains($m.Old)) {
+        Assert-True $false "$($m.Tag) 变异锚点未找到（脚本与源码已脱节）"
+        continue
+    }
+    [System.IO.File]::WriteAllText($target, $text.Replace($m.Old, $m.New),
+            (New-Object System.Text.UTF8Encoding($false)))
+
+    $mutOverlay = [System.IO.File]::ReadAllText((Join-Path $dir "ForgeStyleOverlay.java"), [System.Text.Encoding]::UTF8)
+    $mutDebug = [System.IO.File]::ReadAllText((Join-Path $dir "MirageDebug.java"), [System.Text.Encoding]::UTF8)
+
+    $argv = @("-J-Duser.language=en", "-encoding", "UTF-8", "-d", $mClasses)
+    foreach ($k in $files.Keys) { $argv += (Join-Path $dir $k) }
+    $argv += $harnessSrc
+    $comp = Invoke-Native $javac $argv "mut-$($m.Tag)"
+    if ($comp.Code -ne 0) {
+        Assert-True $false "$($m.Tag) 变异版编译失败：$($comp.Err)"
+        continue
+    }
+    $run = Invoke-Native $java @(
+        "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8",
+        "-cp", $mClasses, "io.mirage.loader.ForgeStyleTextCheck"
+    ) "mut-$($m.Tag)"
+    $gm = [regex]::Match($run.Out, "(?m)^STAT S1\.glyphmixed=(\d+)").Groups[1].Value
+    $ov = [regex]::Match($run.Out, "(?m)^STAT S2\.overflow=(\d+)").Groups[1].Value
+
+    $behaviourRed = $false
+    switch ($m.Kind) {
+        "mixed"    { $behaviourRed = ($gm -ne "" -and [int]$gm -lt 100) }
+        "overflow" { $behaviourRed = ($ov -ne "" -and [int]$ov -gt 0) }
+        "awt"      {
+            $body = [regex]::Match($mutOverlay,
+                '(?s)private static void drawText\(Object gge, Method fill, String text, int x, int y,\s*float sx, int colour, int backdrop\).*?\n    \}').Value
+            $behaviourRed = ($body -match "Graphics2D")
+        }
+    }
+    Assert-True $behaviourRed "$($m.Tag) $($m.Desc)：断言被抓红（glyphmixed=$gm, overflow=$ov）"
+
+    if ($m.Guard -ne "") {
+        $guardSrc = if ($m.GuardIn -eq "debug") { $mutDebug } else { $mutOverlay }
+        Assert-True (-not ($guardSrc -match $m.Guard)) `
+            "$($m.Tag) $($m.Desc)：对应源码守卫同时失效（守卫本身不空转）"
+    }
+}
 
 # ---------------------------------------------------------------- 收尾
 

@@ -45,8 +45,17 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   <li>原版 {@code LoadingOverlay.extractRenderState} 自己一个 {@code text()} 都不调，
  *       只做 fill + logo blit，正是这个原因（javap 26.2 核实过）。</li>
  * </ol>
- * 所以本阶段<b>唯一可用</b>的文字通道是把字光栅化成像素块再用 {@code fill} 画——
+ * 所以本阶段<b>唯一可用</b>的文字通道是把字光栅化成矩形块再用 {@code fill} 画——
  * fill 与 blit 在重载期是好的（进度条就是这么画出来的）。
+ *
+ * <h2>2026-11-07：不再是像素字（抗锯齿灰度字形）</h2>
+ * 原实现 {@code MirageDebug.rasterizePixelText} 用 {@code VALUE_TEXT_ANTIALIAS_OFF} +
+ * {@code alpha>=80} 二值阈值，把 AWT 字拆成 1px 实心矩形 —— 用户实机截图反馈是
+ * 「像素风格文字」：硬边点阵、小字号下笔画粘连。现改为 {@link MirageDebug#rasterizeSmoothText}：
+ * 抗锯齿开、逐像素覆盖率量化成 4 档，{@code drawText} 按档把前景色与所在背景<b>预混</b>后再 fill。
+ * <b>不用 alpha 混合表达字形灰度</b>，因为 fill 是否走 blend 取决于 MC 当时的渲染状态；
+ * 把灰度烘进 RGB 就不依赖 blend，而淡入淡出的整体 alpha 仍照旧由 {@code pack(alpha, rgb)} 承担。
+ * 三条约束一个没松：禁用 {@code gge.text()}、渲染线程零 AWT、字符级预渲染只在 {@link #prewarm()}。
  *
  * <h2>2026-10-31 二次修复：渲染线程绝不允许碰 AWT（字符级预渲染）</h2>
  * 第一版把光栅化直接放在 {@code draw()} 里同步做，结果窗口「未响应」+ 日志被抢写——
@@ -66,7 +75,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  *       拼出来的行与 MC 自带位图字体的观感一致。</li>
  * </ul>
  *
- * <h2>像素字怎么才不糊</h2>
+ * <h2>历史：像素字怎么才不糊（字号结论仍适用于灰度字）</h2>
  * 糊成马赛克的真因是<b>光栅化尺寸没跟目标尺寸对齐</b>：固定按 12px 光栅化，
  * 再在 GUI 空间里缩放绘制，相邻字形像素被压进同一 GUI 像素、另一列被跳过，边缘必糊。
  * 现在<b>在 GUI 空间里取固定可读字号</b>（{@link #GUI_TEXT_PX}，不跟着设计空间 854×480 缩放），
@@ -100,15 +109,22 @@ public final class ForgeStyleOverlay {
     private static final AtomicInteger FRAME = new AtomicInteger();
     private static volatile LoadProgress.View uiView;
     private static volatile long uiViewAt;
+    /**
+     * 当前帧画布尺寸（GUI 像素）。{@code draw()} 每帧开头写、{@link #drawText} 读，
+     * 都在同一个渲染线程；用来把画布外的字形块裁掉，而不是去改布局常量。
+     */
+    private static volatile int canvasW;
+    private static volatile int canvasH;
 
     /**
      * 字符字形缓存：key = 字号 + '\u0000' + 字符；
-     * value = {@code [advance, glyphW, glyphH, (x,y,w,h)×n]}，矩形相对字符自身原点。
+     * value = {@code [advance, glyphW, glyphH, (x,y,w,h,coverage)×n]}，
+     * 矩形相对字符自身原点，{@code coverage} ∈ 1..4 是抗锯齿覆盖率档位。
      * 全部在 {@link #prewarm()} 里一次性用 AWT 光栅化（启动早期、主线程），
      * 渲染线程只<b>查表拼装</b>——绝不在渲染线程碰 AWT（否则 GLFW 消息泵停摆 → 未响应）。
      */
     private static final Map<String, int[]> GLYPH_CACHE = new ConcurrentHashMap<>();
-    /** 各字号下等宽字体的字符步进宽（空格/缺字都按它走）。 */
+    /** 各字号下空格的步进宽（比例字体下空格与缺字都按它留白）。 */
     private static final Map<Integer, Integer> ADVANCE = new ConcurrentHashMap<>();
     /** 字符表是否就绪：未就绪时 draw 跳过文字（下一帧就有），绝不在渲染线程阻塞或光栅化。 */
     private static volatile boolean glyphReady;
@@ -148,35 +164,34 @@ public final class ForgeStyleOverlay {
     public static void prewarm() {
         if (glyphReady) return;
         try {
-            Font f10 = font(GUI_TEXT_PX);
-            Font f9 = font(GUI_TEXT_PX - 1);
             for (int px : new int[]{GUI_TEXT_PX, GUI_TEXT_PX - 1}) {
-                Font f = (px == GUI_TEXT_PX) ? f10 : f9;
+                Font f = font(px);
+                Font cf = cjkFont(px);
                 java.awt.image.BufferedImage probe =
                         new java.awt.image.BufferedImage(1, 1, java.awt.image.BufferedImage.TYPE_INT_ARGB);
                 java.awt.Graphics2D pg = probe.createGraphics();
                 pg.setFont(f);
-                java.awt.FontMetrics fm = pg.getFontMetrics();
-                int advance = Math.max(1, fm.charWidth('0'));
-                ADVANCE.put(px, advance);
+                // 比例字体下空格/缺字按真实空格宽留白，不能再拿等宽 '0' 顶替
+                ADVANCE.put(px, Math.max(1, pg.getFontMetrics().charWidth(' ')));
                 pg.dispose();
                 for (char ch = 32; ch <= 126; ch++) {
-                    int[] g = MirageDebug.rasterizePixelText(String.valueOf(ch), f);
-                    // g = [w, h, (x,y,w,h)×n] → 存 [advance, w, h, (x,y,w,h)×n]
+                    int[] g = MirageDebug.rasterizeSmoothText(String.valueOf(ch), f);
+                    // g = [w, h, (x,y,w,h,c)×n] → [advance=w, w, h, (x,y,w,h,c)×n]
                     int[] store = new int[3 + (g.length - 2)];
-                    store[0] = advance;
+                    // 单字符的 stringWidth 就是该字体下的真实 advance；比例字体也能逐字对齐
+                    store[0] = g[0];
                     store[1] = g[0];
                     store[2] = g[1];
                     System.arraycopy(g, 2, store, 3, g.length - 2);
                     GLYPH_CACHE.put(px + "\u0000" + ch, store);
                 }
-                // 汉字：用 CJK 字体（Consolas 等宽字体不含汉字，否则光栅化成豆腐块）
+                // 汉字：ASCII 的 UI 字体不含汉字，必须用 CJK 字体光栅化
                 for (int i = 0; i < MirageDebug.LOADING_CJK_SOURCE.length(); i++) {
                     char ch = MirageDebug.LOADING_CJK_SOURCE.charAt(i);
                     if (ch <= 126) continue;
-                    int[] g = MirageDebug.rasterizePixelText(String.valueOf(ch), cjkFont(px));
+                    int[] g = MirageDebug.rasterizeSmoothText(String.valueOf(ch), cf);
                     int[] store = new int[3 + (g.length - 2)];
-                    store[0] = g[0]; // CJK 用字形实际宽作步进
+                    store[0] = g[0];
                     store[1] = g[0];
                     store[2] = g[1];
                     System.arraycopy(g, 2, store, 3, g.length - 2);
@@ -184,11 +199,11 @@ public final class ForgeStyleOverlay {
                 }
             }
             glyphReady = true;
-            MirageLog.MIRAGE.debug("加载界面像素字预渲染完成："
+            MirageLog.MIRAGE.debug("加载界面抗锯齿字预渲染完成："
                     + GLYPH_CACHE.size() + " 个字符字形（GUI " + GUI_TEXT_PX + "px / " + (GUI_TEXT_PX - 1) + "px）");
         } catch (Throwable t) {
             textUnavailable = true;
-            MirageLog.MIRAGE.warn("加载界面像素字不可用，后续只画进度条", t);
+            MirageLog.MIRAGE.warn("加载界面文字不可用，后续只画进度条", t);
         }
     }
 
@@ -224,6 +239,8 @@ public final class ForgeStyleOverlay {
             return;
         }
         if (gw <= 0 || gh <= 0) return;
+        canvasW = gw;
+        canvasH = gh;
 
         float sx = gw / (float) ForgeStyleLayout.DESIGN_WIDTH;
         float sy = gh / (float) ForgeStyleLayout.DESIGN_HEIGHT;
@@ -397,14 +414,14 @@ public final class ForgeStyleOverlay {
                 gwPx - margin, ghPx, pack(alpha, ForgeStyleLayout.COLOUR_PANEL));
         drawText(gge, fill, "事件 · " + LoadProgress.EVENT_CAPACITY + " 缓冲",
                 margin + Math.round(4 * sx), gy(ForgeStyleLayout.eventHeaderY(), sy), sx,
-                pack(alpha, ForgeStyleLayout.COLOUR_DIM));
+                pack(alpha, ForgeStyleLayout.COLOUR_DIM), ForgeStyleLayout.COLOUR_PANEL);
         java.util.List<String> lines = v.eventLines();
         int maxTextW = gwPx - 2 * margin - Math.round(8 * sx);
         for (int i = 0; i < ForgeStyleLayout.EVENT_VISIBLE_LINES && i < lines.size(); i++) {
             String raw = lines.get(i);
             drawText(gge, fill, truncate(raw, maxTextW, sx), margin + Math.round(4 * sx),
                     gy(ForgeStyleLayout.eventLineY(i), sy), sx,
-                    pack(alpha, eventColor(raw)));
+                    pack(alpha, eventColor(raw)), ForgeStyleLayout.COLOUR_PANEL);
         }
     }
 
@@ -546,7 +563,7 @@ public final class ForgeStyleOverlay {
 
         // 面板标题
         drawText(gge, fill, "日志（实时）", margin + Math.round(4 * sx),
-                panelTop + Math.round(4 * sy), sx, pack(alpha, 0xAAAAAA));
+                panelTop + Math.round(4 * sy), sx, pack(alpha, 0xAAAAAA), 0x141414);
 
         // 可见行数（标题下方起，到底边止）
         int lineH = GUI_TEXT_PX + 4;
@@ -561,7 +578,7 @@ public final class ForgeStyleOverlay {
         for (int k = lines.length - 1; k >= start; k--) {
             String raw = lines[k];
             drawText(gge, fill, truncate(raw, maxTextW, sx), margin + Math.round(4 * sx), y, sx,
-                    logPanelColor(raw, alpha));
+                    logPanelColor(raw, alpha), 0x141414);
             y -= lineH;
         }
     }
@@ -679,9 +696,9 @@ public final class ForgeStyleOverlay {
             String key = px + "\u0000" + ch;
             if (GLYPH_CACHE.containsKey(key)) continue;
             Font f = (ch <= 126) ? font(px) : cjkFont(px);
-            int[] g = MirageDebug.rasterizePixelText(String.valueOf(ch), f);
+            int[] g = MirageDebug.rasterizeSmoothText(String.valueOf(ch), f);
             int[] store = new int[3 + (g.length - 2)];
-            store[0] = (ch <= 126) ? ADVANCE.getOrDefault(px, Math.max(1, g[0])) : g[0];
+            store[0] = g[0];
             store[1] = g[0];
             store[2] = g[1];
             System.arraycopy(g, 2, store, 3, g.length - 2);
@@ -717,13 +734,14 @@ public final class ForgeStyleOverlay {
             }
             int advance = g[0];
             int glyphH = g[2];
-            for (int k = 3; k + 3 < g.length; k += 4) {
-                rects.add(new int[]{cursor + g[k], g[k + 1], g[k + 2], g[k + 3]});
+            for (int k = 3; k + 4 < g.length; k += 5) {
+                rects.add(new int[]{cursor + g[k], g[k + 1], g[k + 2], g[k + 3], g[k + 4]});
             }
             cursor += advance;
             if (glyphH > maxH) maxH = glyphH;
         }
-        int[] out = new int[2 + rects.size() * 4];
+        // out = [总宽, 最大高, (x,y,w,h,coverage)×n]
+        int[] out = new int[2 + rects.size() * 5];
         out[0] = cursor;
         out[1] = maxH;
         int o = 2;
@@ -732,6 +750,7 @@ public final class ForgeStyleOverlay {
             out[o++] = r[1];
             out[o++] = r[2];
             out[o++] = r[3];
+            out[o++] = r[4];
         }
         return out;
     }
@@ -741,28 +760,68 @@ public final class ForgeStyleOverlay {
         return mask == null ? 0 : Math.max(0, mask[0]);
     }
 
-    /** 用 fill 逐块画一行像素字：mask = [宽, 高, (x, y, w, h)×n]。 */
+    /** 用 fill 逐块画一行抗锯齿字：mask = [宽, 高, (x, y, w, h, coverage)×n]。 */
     private static void drawText(Object gge, Method fill, String text, int x, int y,
                                  float sx, int colour) {
+        drawText(gge, fill, text, x, y, sx, colour, ForgeStyleLayout.FORGE_RED);
+    }
+
+    /**
+     * @param backdrop 这一行所在的底色（红底 / 深色事件面板）。低覆盖率的前景必须先与它预混，
+     *                 否则「半透明 fill 是否被 MC 混合」是个未知量，字会退回硬边点阵。
+     */
+    private static void drawText(Object gge, Method fill, String text, int x, int y,
+                                 float sx, int colour, int backdrop) {
         int[] mask = mask(text, sx);
         if (mask == null) return;
         if (!textDrawnLogged) {
             textDrawnLogged = true;
-            MirageLog.MIRAGE.info("加载界面文字已出图：AWT 像素字（字符级预渲染 + fill 逐块），"
+            MirageLog.MIRAGE.info("加载界面文字已出图：AWT 抗锯齿灰度字（字符级预渲染 + 按背景预混 + fill 逐块），"
                     + "字号 " + textPixelSize(sx) + "px，字形缓存 " + GLYPH_CACHE.size() + " 个");
         }
-        for (int i = 2; i + 3 < mask.length; i += 4) {
+        int alpha = (colour >>> 24) & 0xFF;
+        int fg = colour & 0xFFFFFF;
+        for (int i = 2; i + 4 < mask.length; i += 5) {
             int rx = mask[i];
             int ry = mask[i + 1];
             int rw = mask[i + 2];
             int rh = mask[i + 3];
-            MirageDebug.fillRect(gge, fill, x + rx, y + ry, x + rx + rw, y + ry + rh, colour);
+            int coverage = mask[i + 4];
+            int rgb = coverage >= 4 ? fg : blend(backdrop, fg, coverage);
+            int px0 = x + rx;
+            int py0 = y + ry;
+            int px1 = px0 + rw;
+            int py1 = py0 + rh;
+            // 抗锯齿字形比二值点阵高 1~2px，guiScale>1 时事件流末行会顶出画布底边 1px。
+            // 按当前帧画布裁剪即可；不要为此改布局常量（断言会跟着常量移动，成为假绿）。
+            if (px0 >= canvasW || py0 >= canvasH || px1 <= 0 || py1 <= 0) continue;
+            if (px0 < 0) px0 = 0;
+            if (py0 < 0) py0 = 0;
+            if (px1 > canvasW) px1 = canvasW;
+            if (py1 > canvasH) py1 = canvasH;
+            MirageDebug.fillRect(gge, fill, px0, py0, px1, py1, pack(alpha, rgb));
         }
     }
 
-    /** 等宽优先：加载界面里全是 ASCII（Memory/CPU/进度标签/版本号），等宽更整齐。 */
+    /** 前景按覆盖率档位烘进背景色：1..3 档 → 32/96/160 / 255，4 档直接用前景色。 */
+    private static int blend(int backdrop, int fg, int coverage) {
+        int t = coverage * 64 - 32;
+        int br = (backdrop >>> 16) & 0xFF;
+        int bg = (backdrop >>> 8) & 0xFF;
+        int bb = backdrop & 0xFF;
+        int fr = (fg >>> 16) & 0xFF;
+        int fgc = (fg >>> 8) & 0xFF;
+        int fb = fg & 0xFF;
+        int r = br + (fr - br) * t / 255;
+        int g = bg + (fgc - bg) * t / 255;
+        int b = bb + (fb - bb) * t / 255;
+        return (r << 16) | (g << 8) | b;
+    }
+
+    /** 系统 UI 无衬线优先：加载界面不该再是等宽终端点阵风；逐字步进按真实 advance 取。 */
     private static Font pickFont(int px) {
-        String[] preferred = {"Consolas", "Cascadia Mono", "Lucida Console", "DejaVu Sans Mono"};
+        String[] preferred = {"Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei",
+                "Noto Sans CJK SC", "Source Han Sans SC"};
         try {
             Set<String> available = new HashSet<>();
             for (String family : GraphicsEnvironment.getLocalGraphicsEnvironment()
@@ -777,7 +836,7 @@ public final class ForgeStyleOverlay {
         } catch (Throwable ignored) {
             // 拿不到字体列表就走 MONOSPACED 兜底
         }
-        return new Font(Font.MONOSPACED, Font.PLAIN, px);
+        return new Font(Font.SANS_SERIF, Font.PLAIN, px);
     }
 
     /** 每块绘制的兜底：单个失败只丢自己，不影响其它块。 */
