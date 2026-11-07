@@ -61,6 +61,7 @@ $files = @{
     "MirageDebug.java"       = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\MirageDebug.java"
     "ForgeStyleLayout.java"  = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\ForgeStyleLayout.java"
     "LoadingFonts.java"      = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\LoadingFonts.java"
+    "ExitDissolve.java"      = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\ExitDissolve.java"
     "ForgeStyleOverlay.java" = Join-Path $root "core\mirage-loader\src\main\java\io\mirage\loader\ForgeStyleOverlay.java"
 }
 foreach ($k in $files.Keys) {
@@ -483,6 +484,7 @@ $compile = Invoke-Native $javac @(
     $files["MirageDebug.java"],
     $files["ForgeStyleLayout.java"],
     $files["LoadingFonts.java"],
+    $files["ExitDissolve.java"],
     $files["ForgeStyleOverlay.java"],
     $harnessSrc
 ) "compile"

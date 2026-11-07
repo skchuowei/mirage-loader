@@ -126,6 +126,28 @@ public final class ForgeStyleOverlay {
     private static volatile int canvasH;
 
     /**
+     * 标题画面首次出现时的收尾溶解（遮罩满不透明消失 → 硬切 的兜底）。
+     *
+     * <p>时长 600ms：比加载遮罩自身的淡出（MC 是 1s）短，避免和 MC 的淡出叠成「拖沓」；
+     * 又足够长到人眼能看出是渐变而不是跳变。
+     */
+    private static final ExitDissolve EXIT_DISSOLVE = new ExitDissolve(600L);
+    /** 加载遮罩是否画过（没画过就不该在标题画面上盖红屏）。 */
+    private static volatile boolean overlayDrawn;
+    /** 遮罩最后一次画出来的不透明度；满不透明消失 = 需要补溶解。 */
+    private static volatile int lastDrawnAlpha = 255;
+    /** 收尾溶解是否已打过结束锚点（只打一次，避免刷日志）。 */
+    private static volatile boolean exitDissolveLogged;
+    /**
+     * 遮罩最后一帧用过的视图快照。
+     *
+     * <p>收尾溶解必须和遮罩最后一帧<b>逐像素一致</b>，否则接缝处会「少几条 meter」
+     * 反而更突兀。标题画面出现时 {@link LoadProgress#finish()} 已经把 meter 清空，
+     * 所以这里留一份快照给溶解用，不去复用现场数据。
+     */
+    private static volatile LoadProgress.View lastDrawnView;
+
+    /**
      * 字符字形缓存：key = 字号 + '\u0000' + 字符；
      * value = {@code [advance, glyphW, glyphH, (x,y,w,h,coverage)×n]}，
      * 矩形相对字符自身原点，{@code coverage} ∈ 1..4 是抗锯齿覆盖率档位。
@@ -255,6 +277,11 @@ public final class ForgeStyleOverlay {
         float sx = gw / (float) ForgeStyleLayout.DESIGN_WIDTH;
         float sy = gh / (float) ForgeStyleLayout.DESIGN_HEIGHT;
         int alpha = overlayAlpha(overlay);
+        // 记下遮罩「最后一次画出来」的不透明度：标题画面据此判断收尾要不要补一次溶解
+        // （遮罩是满不透明消失的 = 硬切；已经被 MC 正常淡出到接近 0 的就不该再盖回去）。
+        lastDrawnAlpha = alpha;
+        overlayDrawn = true;
+        lastDrawnView = view();
 
         // 每一块单独兜底：任何一块失败都不会连累其它块
         step("背景", () -> MirageDebug.fillRect(gge, fill, 0, 0, gw, gh,
@@ -270,6 +297,73 @@ public final class ForgeStyleOverlay {
             drawDashboard(gge, fill, sx, sy, alpha, FRAME.getAndIncrement());
         }
         step("版本号", () -> drawVersion(gge, fill, sx, sy, alpha));
+    }
+
+    // ---- 标题画面收尾溶解（遮罩「满不透明消失」的兜底） ----
+
+    /**
+     * 标题画面出现时调用：如果加载遮罩是<b>满不透明</b>消失的（= 硬切），启动一次收尾溶解。
+     *
+     * <p>门槛 {@code lastDrawnAlpha >= 200}：MC 自己把遮罩正常淡出到接近 0 时不该再盖红屏，
+     * 否则会反过来制造一次「Logo → 仪表盘」的跳变。
+     */
+    public static void beginExitDissolve() {
+        if (!overlayDrawn) return;
+        if (lastDrawnAlpha < 200) return;
+        if (EXIT_DISSOLVE.begin(System.currentTimeMillis())) {
+            MiragePerf.mark("ui.exit.dissolve.begin");
+            MirageLog.MIRAGE.info("加载界面收尾：遮罩满不透明消失（alpha=" + lastDrawnAlpha
+                    + "），标题画面补 600ms 交叉溶解");
+        }
+    }
+
+    /**
+     * 当前收尾溶解的剩余不透明度 0..255；0 表示「不要画」。
+     * 顺便在归零那一刻打一次结束锚点。
+     */
+    public static int exitDissolveAlpha() {
+        int a = EXIT_DISSOLVE.alpha255(System.currentTimeMillis());
+        if (a == 0 && EXIT_DISSOLVE.started() && !exitDissolveLogged) {
+            exitDissolveLogged = true;
+            MiragePerf.mark("ui.exit.dissolve.done");
+        }
+        return a;
+    }
+
+    /**
+     * 把仪表盘整体按 {@code alpha} 叠在屏幕上（标题画面的第一层）。
+     *
+     * <p>与 {@link #draw} 的区别：不读 MC 遮罩状态、不吃 {@code overlay} 对象，
+     * 只按给定 alpha 画同一套内容，所以和遮罩最后一帧逐像素一致，肉眼看不到接缝。
+     */
+    public static void drawExitFrame(Object gge, int alpha) {
+        if (gge == null || alpha <= 0) return;
+        Method fill;
+        int gw;
+        int gh;
+        try {
+            fill = MirageDebug.fillMethod(gge);
+            gw = MirageDebug.guiSize(gge, true);
+            gh = MirageDebug.guiSize(gge, false);
+        } catch (Throwable t) {
+            return;
+        }
+        if (gw <= 0 || gh <= 0) return;
+
+        final float sx = gw / (float) ForgeStyleLayout.DESIGN_WIDTH;
+        final float sy = gh / (float) ForgeStyleLayout.DESIGN_HEIGHT;
+        final int a = Math.min(255, Math.max(0, alpha));
+        LoadProgress.View snapshot = lastDrawnView;
+        final LoadProgress.View v = snapshot != null ? snapshot : view();
+        final int frame = FRAME.getAndIncrement();
+
+        step("溶解背景", () -> MirageDebug.fillRect(gge, fill, 0, 0, gw, gh,
+                pack(a, ForgeStyleLayout.FORGE_RED)));
+        step("溶解分段总进度", () -> drawSegmentedTotal(gge, fill, sx, sy, a, v, frame));
+        step("溶解面包屑", () -> drawBreadcrumb(gge, fill, sx, sy, a, v));
+        step("溶解独立进度条", () -> drawMeters(gge, fill, sx, sy, a, v, frame));
+        step("溶解计数行", () -> drawCounters(gge, fill, sx, sy, a, v));
+        step("溶解事件流", () -> drawEvents(gge, fill, sx, sy, a, v));
     }
 
     // ---- 真实进度仪表盘：分段总条 + 独立 meter + 计数 + 事件流 ----

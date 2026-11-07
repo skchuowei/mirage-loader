@@ -477,6 +477,9 @@ public final class MirageDebug {
         // TitleScreen 是加载期的真正终点：收掉所有长驻 meter（尤其是 S7 的 MC 主类不定条），
         // 分段总条填满，事件流留一条 "加载完成 · 总耗时"。
         if (!LoadProgress.isFinished()) LoadProgress.finish();
+        // 收尾溶解的起点：标题画面出现的那一刻。是否真的溶解由 ForgeStyleOverlay 判断
+        // （遮罩满不透明消失才补，已被 MC 正常淡出的不补，否则反过来制造跳变）。
+        ForgeStyleOverlay.beginExitDissolve();
         // 性能锚点：TitleScreen 就绪 = 用户真正能操作游戏的时刻。
         // S7 Loaded done 只是「mod 管线结束」，MC 自身的资源重载还没走完——
         // 没有这个锚点就答不出「点开游戏到能玩要多久」（docs/perf-baseline.md §5 的缺口 3）。
@@ -746,6 +749,11 @@ public final class MirageDebug {
     /** ASM 在 TitleScreen.extractRenderState 每个 RETURN 前调用 */
     public static void drawTitleOverlay(Object gge, Object font) {
         if (gge == null) return;
+        // 收尾交叉溶解（第一层）：加载遮罩若「满不透明消失」就是硬切，这里先整屏盖住
+        // 再 600ms 线性淡出，把仪表盘溶解成 MC 自己的 Logo / 标题画面。
+        // alpha 归零后本调用即空转，不影响后续任何标题画面绘制。
+        int dissolve = ForgeStyleOverlay.exitDissolveAlpha();
+        if (dissolve > 0) ForgeStyleOverlay.drawExitFrame(gge, dissolve);
         try {
             Method fill = fillMethod(gge);
             // 左上角徽标（朴素 HUD 条，无装饰线）
