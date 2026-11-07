@@ -257,6 +257,48 @@ function Format-SessionReport {
     return $sb.ToString()
 }
 
+function Get-TitleDispersion {
+    <# 到 TitleScreen 的样本离散度。
+       存在的理由：同一产物连续启动的实测跨度可达 2 倍（T1 结账时六次落在 13781~27638 ms），
+       所以绝对值只能当"单次样本"，不能当阈值/回归判据。把离散度摆出来，读者才不会被单次数字骗。 #>
+    param($Reports)
+    $vals = @()
+    foreach ($r in $Reports) { if ($null -ne $r.toTitleMs) { $vals += [int]$r.toTitleMs } }
+    if ($vals.Count -eq 0) { return $null }
+    $sorted = @($vals | Sort-Object)
+    $n = $sorted.Count
+    if ($n % 2 -eq 1) {
+        $median = [int]$sorted[([int](($n - 1) / 2))]
+    } else {
+        $median = [int][math]::Round(([int]$sorted[$n / 2 - 1] + [int]$sorted[$n / 2]) / 2)
+    }
+    $min = [int]$sorted[0]
+    $max = [int]$sorted[$n - 1]
+    $ratio = $null
+    if ($min -gt 0) { $ratio = [math]::Round($max / $min, 1) }
+    return @{ count = $vals.Count; min = $min; max = $max; median = $median; ratio = $ratio }
+}
+
+function Format-DispersionSection {
+    <# 生成"口径与可信度"段。这段必须由脚本生成——写死在 md 里会被下一次 -OutFile 整体覆盖掉。 #>
+    param($Reports)
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.AppendLine("## 口径：绝对值是单次样本，不能当阈值")
+    [void]$sb.AppendLine()
+    $d = Get-TitleDispersion -Reports $Reports
+    if ($null -eq $d) {
+        [void]$sb.AppendLine('- 本批会话**没有**任何一个带 `titlescreen` 锚点，因此没有可用于比较的到 TitleScreen 耗时。')
+    } else {
+        [void]$sb.AppendLine('- 本批 ' + $d.count + ' 个会话带 `titlescreen` 锚点：最小 **' + $d.min + ' ms** / 中位数 **' + $d.median + ' ms** / 最大 **' + $d.max + ' ms**（最大是最小的 **' + $d.ratio + ' 倍**）。')
+        [void]$sb.AppendLine('- 同一产物连续启动的耗时主要受机器状态与磁盘缓存影响，**跨度 2 倍属正常**。单次数字写成"基线值"会被误读成阈值。')
+    }
+    [void]$sb.AppendLine('- **能用**这些数字做的事：看锚点是否齐全（结构完整性）、看同一会话内各段的**相对占比**、定位哪一段是瓶颈。')
+    [void]$sb.AppendLine('- **不能用**这些数字做的事：当性能目标/回归判据、拿单次数字比两个包快慢、跨行比较不同会话（各会话可能来自不同 jar，见「体积」节的 jar 修改时间）。')
+    [void]$sb.AppendLine('- 要比两个包快慢：同机器状态各跑 3 次以上，取**中位数**并同时记离散度，否则结论不成立。')
+    [void]$sb.AppendLine()
+    return $sb.ToString()
+}
+
 # ---------------------------------------------------------------------------
 # 自检
 # ---------------------------------------------------------------------------
@@ -387,6 +429,24 @@ function Invoke-SelfTest {
     Assert-True ($r4a.stages[0].ms -eq 100) "样本4 会话1 的 S1 = 100 ms"
     Assert-True ($r4b.stages[0].ms -eq 110) "样本4 会话2 的 S1 = 110 ms"
 
+    # 离散度护栏：绝对值不能当阈值（T1 结账实测同产物六次 13781~27638 ms，跨度 2 倍）。
+    # 这段以前只写进 md，被下一次 -OutFile 覆盖掉就没了 ⇒ 现在由生成器输出并有断言盯着。
+    $fake = @(
+        @{ toTitleMs = 100 },
+        @{ toTitleMs = 300 },
+        @{ toTitleMs = $null }
+    )
+    $d = Get-TitleDispersion -Reports $fake
+    Assert-True ($d.count -eq 2) "离散度只统计带 titlescreen 的会话（2，实际 $($d.count)）"
+    Assert-True ($d.min -eq 100 -and $d.max -eq 300) "离散度 min=100 / max=300（实际 $($d.min) / $($d.max)）"
+    Assert-True ($d.median -eq 200) "离散度中位数 = 200（实际 $($d.median)）"
+    Assert-True ($d.ratio -eq 3) "离散度跨度倍数 = 3（实际 $($d.ratio)）"
+    $dNone = Get-TitleDispersion -Reports @(@{ toTitleMs = $null })
+    Assert-True ($null -eq $dNone) "无 titlescreen 样本时离散度返回 null（不返回 0）"
+    $caveat = Format-DispersionSection -Reports $fake
+    Assert-True ($caveat.Contains("不能当阈值")) "口径段原文里明写『不能当阈值』"
+    Assert-True ($caveat.Contains("3 倍")) "口径段把跨度倍数渲染出来（含『3 倍』）"
+
     Write-Host ""
     Write-Host ("== 自检结果：PASS " + $script:pass + " / FAIL " + $script:fail + " ==") -ForegroundColor Cyan
     if ($script:fail -gt 0) {
@@ -437,6 +497,7 @@ $md = New-Object System.Text.StringBuilder
 [void]$md.AppendLine('> 由 `scripts/measure_startup.ps1` 生成于 ' + (Get-Date -Format "yyyy-MM-dd HH:mm:ss"))
 [void]$md.AppendLine('> 数据来源：`' + $LogPath + '`')
 [void]$md.AppendLine()
+[void]$md.AppendLine((Format-DispersionSection -Reports $reports))
 [void]$md.AppendLine("## 会话总览")
 [void]$md.AppendLine()
 [void]$md.AppendLine("| # | 横幅时刻 | 端到端 | 到 TitleScreen | 堆峰值 | 锚点 |")

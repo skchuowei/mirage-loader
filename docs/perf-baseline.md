@@ -1,7 +1,16 @@
 # 启动性能基线（自动生成）
 
-> 由 `scripts/measure_startup.ps1` 生成于 2026-11-07 10:22:34
+> 由 `scripts/measure_startup.ps1` 生成于 2026-11-07 12:51:56
 > 数据来源：`D:\bing\MC\mcmoderr-my\mc-shili\versions\26.2-mirage\logs\mirage-launch.log`
+
+## 口径：绝对值是单次样本，不能当阈值
+
+- 本批 14 个会话带 `titlescreen` 锚点：最小 **12030 ms** / 中位数 **23598 ms** / 最大 **33160 ms**（最大是最小的 **2.8 倍**）。
+- 同一产物连续启动的耗时主要受机器状态与磁盘缓存影响，**跨度 2 倍属正常**。单次数字写成"基线值"会被误读成阈值。
+- **能用**这些数字做的事：看锚点是否齐全（结构完整性）、看同一会话内各段的**相对占比**、定位哪一段是瓶颈。
+- **不能用**这些数字做的事：当性能目标/回归判据、拿单次数字比两个包快慢、跨行比较不同会话（各会话可能来自不同 jar，见「体积」节的 jar 修改时间）。
+- 要比两个包快慢：同机器状态各跑 3 次以上，取**中位数**并同时记离散度，否则结论不成立。
+
 
 ## 会话总览
 
@@ -23,6 +32,15 @@
 | 14 | 2026-11-07 09:45:12 | 37000 ms | 33160 ms | 488 MB | 16 |
 | 15 | 2026-11-07 10:15:36 | 20000 ms | 13781 ms | 467 MB | 16 |
 | 16 | 2026-11-07 10:16:02 | 57000 ms | 25736 ms | 486 MB | 16 |
+| 17 | 2026-11-07 10:56:32 | 25000 ms | 20603 ms | 470 MB | 16 |
+| 18 | 2026-11-07 11:21:05 | 25000 ms | 19811 ms | 471 MB | 16 |
+| 19 | 2026-11-07 11:22:01 | 34000 ms | 25841 ms | 503 MB | 16 |
+| 20 | 2026-11-07 11:22:39 | 35000 ms | 27638 ms | 476 MB | 16 |
+| 21 | 2026-11-07 11:34:31 | 582000 ms | 29154 ms | 716 MB | 18 |
+| 22 | 2026-11-07 12:00:23 | 21000 ms | 18126 ms | 476 MB | 16 |
+| 23 | 2026-11-07 12:44:30 | 28000 ms | 24948 ms | 484 MB | 16 |
+| 24 | 2026-11-07 12:45:13 | 30000 ms | 23827 ms | 469 MB | 16 |
+| 25 | 2026-11-07 12:47:23 | 50000 ms | 23369 ms | 667 MB | 17 |
 
 ### 会话 1（Mirage 0.4.0，横幅 2026-10-31 17:28:54）
 
@@ -458,12 +476,231 @@
 | 早期窗口 GL 交接 | 87 ms |
 | MC 资源重载 → TitleScreen | 5897 ms |
 
+### 会话 17（Mirage 0.4.0，横幅 2026-11-07 10:56:32）
+
+| 项 | 值 |
+|---|---|
+| 分阶段（LS 骨架行自带耗时） | S1 Discovery = 167 ms；S2 Parse = 16 ms；S3 BytecodeTransform = 1236 ms；S4 RegistryMerge = 9361 ms；S5 EventBusInit = 0 ms；S6 ModInit = 152 ms；S7 Loaded = 12409 ms |
+| 端到端（横幅 → S7 done） | 25000 ms |
+| **到 TitleScreen**（用户能操作游戏） | 20603 ms |
+| 堆峰值（锚点内最大 heapPeak） | 470 MB |
+| 锚点数 | 16 |
+
+| 段 | 耗时 |
+|---|---:|
+| S4 SharedConstants.tryDetectVersion | 1759 ms |
+| S4 Bootstrap.bootStrap (MC 原版) | 7577 ms |
+| S4 解冻 MappedRegistry | 17 ms |
+| S4 装配方 | 4 ms |
+| S7 Mirage 侧前置开销 | 13 ms |
+| S7 MC 窗口创建前 | 2389 ms |
+| 早期窗口 等 renderLock | 0 ms |
+| 早期窗口 等渲染线程退出 | 5 ms |
+| 早期窗口 GL 交接 | 5 ms |
+| MC 资源重载 → TitleScreen | 5348 ms |
+
+### 会话 18（Mirage 0.4.0，横幅 2026-11-07 11:21:05）
+
+| 项 | 值 |
+|---|---|
+| 分阶段（LS 骨架行自带耗时） | S1 Discovery = 180 ms；S2 Parse = 17 ms；S3 BytecodeTransform = 1050 ms；S4 RegistryMerge = 8796 ms；S5 EventBusInit = 0 ms；S6 ModInit = 139 ms；S7 Loaded = 12923 ms |
+| 端到端（横幅 → S7 done） | 25000 ms |
+| **到 TitleScreen**（用户能操作游戏） | 19811 ms |
+| 堆峰值（锚点内最大 heapPeak） | 471 MB |
+| 锚点数 | 16 |
+
+| 段 | 耗时 |
+|---|---:|
+| S4 SharedConstants.tryDetectVersion | 1920 ms |
+| S4 Bootstrap.bootStrap (MC 原版) | 6852 ms |
+| S4 解冻 MappedRegistry | 17 ms |
+| S4 装配方 | 3 ms |
+| S7 Mirage 侧前置开销 | 10 ms |
+| S7 MC 窗口创建前 | 2256 ms |
+| 早期窗口 等 renderLock | 2 ms |
+| 早期窗口 等渲染线程退出 | 1 ms |
+| 早期窗口 GL 交接 | 5 ms |
+| MC 资源重载 → TitleScreen | 5019 ms |
+
+### 会话 19（Mirage 0.4.0，横幅 2026-11-07 11:22:01）
+
+| 项 | 值 |
+|---|---|
+| 分阶段（LS 骨架行自带耗时） | S1 Discovery = 199 ms；S2 Parse = 24 ms；S3 BytecodeTransform = 891 ms；S4 RegistryMerge = 12427 ms；S5 EventBusInit = 0 ms；S6 ModInit = 238 ms；S7 Loaded = 19367 ms |
+| 端到端（横幅 → S7 done） | 34000 ms |
+| **到 TitleScreen**（用户能操作游戏） | 25841 ms |
+| 堆峰值（锚点内最大 heapPeak） | 503 MB |
+| 锚点数 | 16 |
+
+| 段 | 耗时 |
+|---|---:|
+| S4 SharedConstants.tryDetectVersion | 1564 ms |
+| S4 Bootstrap.bootStrap (MC 原版) | 10818 ms |
+| S4 解冻 MappedRegistry | 30 ms |
+| S4 装配方 | 6 ms |
+| S7 Mirage 侧前置开销 | 19 ms |
+| S7 MC 窗口创建前 | 4354 ms |
+| 早期窗口 等 renderLock | 6 ms |
+| 早期窗口 等渲染线程退出 | 2 ms |
+| 早期窗口 GL 交接 | 9 ms |
+| MC 资源重载 → TitleScreen | 6044 ms |
+
+### 会话 20（Mirage 0.4.0，横幅 2026-11-07 11:22:39）
+
+| 项 | 值 |
+|---|---|
+| 分阶段（LS 骨架行自带耗时） | S1 Discovery = 198 ms；S2 Parse = 29 ms；S3 BytecodeTransform = 1229 ms；S4 RegistryMerge = 12888 ms；S5 EventBusInit = 0 ms；S6 ModInit = 322 ms；S7 Loaded = 18932 ms |
+| 端到端（横幅 → S7 done） | 35000 ms |
+| **到 TitleScreen**（用户能操作游戏） | 27638 ms |
+| 堆峰值（锚点内最大 heapPeak） | 476 MB |
+| 锚点数 | 16 |
+
+| 段 | 耗时 |
+|---|---:|
+| S4 SharedConstants.tryDetectVersion | 2139 ms |
+| S4 Bootstrap.bootStrap (MC 原版) | 10712 ms |
+| S4 解冻 MappedRegistry | 25 ms |
+| S4 装配方 | 7 ms |
+| S7 Mirage 侧前置开销 | 48 ms |
+| S7 MC 窗口创建前 | 3888 ms |
+| 早期窗口 等 renderLock | 3 ms |
+| 早期窗口 等渲染线程退出 | 11 ms |
+| 早期窗口 GL 交接 | 8 ms |
+| MC 资源重载 → TitleScreen | 6931 ms |
+
+### 会话 21（Mirage 0.4.0，横幅 2026-11-07 11:34:31）
+
+| 项 | 值 |
+|---|---|
+| 分阶段（LS 骨架行自带耗时） | S1 Discovery = 508 ms；S2 Parse = 122 ms；S3 BytecodeTransform = 2389 ms；S4 RegistryMerge = 12062 ms；S5 EventBusInit = 1 ms；S6 ModInit = 188 ms；S7 Loaded = 560983 ms |
+| 端到端（横幅 → S7 done） | 582000 ms |
+| **到 TitleScreen**（用户能操作游戏） | 29154 ms |
+| 堆峰值（锚点内最大 heapPeak） | 716 MB |
+| 锚点数 | 18 |
+
+| 段 | 耗时 |
+|---|---:|
+| S4 SharedConstants.tryDetectVersion | 3526 ms |
+| S4 Bootstrap.bootStrap (MC 原版) | 8501 ms |
+| S4 解冻 MappedRegistry | 21 ms |
+| S4 装配方 | 7 ms |
+| S7 Mirage 侧前置开销 | 15 ms |
+| S7 MC 窗口创建前 | 2779 ms |
+| 早期窗口 等 renderLock | 8 ms |
+| 早期窗口 等渲染线程退出 | 4 ms |
+| 早期窗口 GL 交接 | 7 ms |
+| MC 资源重载 → TitleScreen | 5848 ms |
+
+### 会话 22（Mirage 0.4.0，横幅 2026-11-07 12:00:23）
+
+| 项 | 值 |
+|---|---|
+| 分阶段（LS 骨架行自带耗时） | S1 Discovery = 163 ms；S2 Parse = 13 ms；S3 BytecodeTransform = 839 ms；S4 RegistryMerge = 7995 ms；S5 EventBusInit = 0 ms；S6 ModInit = 141 ms；S7 Loaded = 10766 ms |
+| 端到端（横幅 → S7 done） | 21000 ms |
+| **到 TitleScreen**（用户能操作游戏） | 18126 ms |
+| 堆峰值（锚点内最大 heapPeak） | 476 MB |
+| 锚点数 | 16 |
+
+| 段 | 耗时 |
+|---|---:|
+| S4 SharedConstants.tryDetectVersion | 1533 ms |
+| S4 Bootstrap.bootStrap (MC 原版) | 6436 ms |
+| S4 解冻 MappedRegistry | 19 ms |
+| S4 装配方 | 5 ms |
+| S7 Mirage 侧前置开销 | 11 ms |
+| S7 MC 窗口创建前 | 2473 ms |
+| 早期窗口 等 renderLock | 缺锚点 |
+| 早期窗口 等渲染线程退出 | 缺锚点 |
+| 早期窗口 GL 交接 | 5 ms |
+| MC 资源重载 → TitleScreen | 4551 ms |
+
+**本会话测不了的维度**：
+- 早期窗口交接：缺锚点 early.handoff.lock
+
+### 会话 23（Mirage 0.4.0，横幅 2026-11-07 12:44:30）
+
+| 项 | 值 |
+|---|---|
+| 分阶段（LS 骨架行自带耗时） | S1 Discovery = 388 ms；S2 Parse = 55 ms；S3 BytecodeTransform = 1452 ms；S4 RegistryMerge = 10897 ms；S5 EventBusInit = 0 ms；S6 ModInit = 200 ms；S7 Loaded = 13314 ms |
+| 端到端（横幅 → S7 done） | 28000 ms |
+| **到 TitleScreen**（用户能操作游戏） | 24948 ms |
+| 堆峰值（锚点内最大 heapPeak） | 484 MB |
+| 锚点数 | 16 |
+
+| 段 | 耗时 |
+|---|---:|
+| S4 SharedConstants.tryDetectVersion | 2280 ms |
+| S4 Bootstrap.bootStrap (MC 原版) | 8583 ms |
+| S4 解冻 MappedRegistry | 23 ms |
+| S4 装配方 | 7 ms |
+| S7 Mirage 侧前置开销 | 18 ms |
+| S7 MC 窗口创建前 | 2967 ms |
+| 早期窗口 等 renderLock | 缺锚点 |
+| 早期窗口 等渲染线程退出 | 缺锚点 |
+| 早期窗口 GL 交接 | 4 ms |
+| MC 资源重载 → TitleScreen | 5778 ms |
+
+**本会话测不了的维度**：
+- 早期窗口交接：缺锚点 early.handoff.lock
+
+### 会话 24（Mirage 0.4.0，横幅 2026-11-07 12:45:13）
+
+| 项 | 值 |
+|---|---|
+| 分阶段（LS 骨架行自带耗时） | S1 Discovery = 274 ms；S2 Parse = 13 ms；S3 BytecodeTransform = 1052 ms；S4 RegistryMerge = 10230 ms；S5 EventBusInit = 0 ms；S6 ModInit = 188 ms；S7 Loaded = 15987 ms |
+| 端到端（横幅 → S7 done） | 30000 ms |
+| **到 TitleScreen**（用户能操作游戏） | 23827 ms |
+| 堆峰值（锚点内最大 heapPeak） | 469 MB |
+| 锚点数 | 16 |
+
+| 段 | 耗时 |
+|---|---:|
+| S4 SharedConstants.tryDetectVersion | 1729 ms |
+| S4 Bootstrap.bootStrap (MC 原版) | 8468 ms |
+| S4 解冻 MappedRegistry | 20 ms |
+| S4 装配方 | 10 ms |
+| S7 Mirage 侧前置开销 | 14 ms |
+| S7 MC 窗口创建前 | 3086 ms |
+| 早期窗口 等 renderLock | 缺锚点 |
+| 早期窗口 等渲染线程退出 | 缺锚点 |
+| 早期窗口 GL 交接 | 5 ms |
+| MC 资源重载 → TitleScreen | 5787 ms |
+
+**本会话测不了的维度**：
+- 早期窗口交接：缺锚点 early.handoff.lock
+
+### 会话 25（Mirage 0.4.0，横幅 2026-11-07 12:47:23）
+
+| 项 | 值 |
+|---|---|
+| 分阶段（LS 骨架行自带耗时） | S1 Discovery = 283 ms；S2 Parse = 24 ms；S3 BytecodeTransform = 1051 ms；S4 RegistryMerge = 10302 ms；S5 EventBusInit = 0 ms；S6 ModInit = 196 ms；S7 Loaded = 36335 ms |
+| 端到端（横幅 → S7 done） | 50000 ms |
+| **到 TitleScreen**（用户能操作游戏） | 23369 ms |
+| 堆峰值（锚点内最大 heapPeak） | 667 MB |
+| 锚点数 | 17 |
+
+| 段 | 耗时 |
+|---|---:|
+| S4 SharedConstants.tryDetectVersion | 1635 ms |
+| S4 Bootstrap.bootStrap (MC 原版) | 8637 ms |
+| S4 解冻 MappedRegistry | 22 ms |
+| S4 装配方 | 6 ms |
+| S7 Mirage 侧前置开销 | 21 ms |
+| S7 MC 窗口创建前 | 3190 ms |
+| 早期窗口 等 renderLock | 缺锚点 |
+| 早期窗口 等渲染线程退出 | 缺锚点 |
+| 早期窗口 GL 交接 | 6 ms |
+| MC 资源重载 → TitleScreen | 5506 ms |
+
+**本会话测不了的维度**：
+- 早期窗口交接：缺锚点 early.handoff.lock
+
 ## 体积
 
 | 项 | 值 |
 |---|---|
-| D:\bing\MC\mcmoderr-my\mc-shili\libraries\io\mirage\mirage-launch\0.1.0\mirage-launch-0.1.0.jar | 2.78 MB（2910948 字节） |
-| 修改时间 | 11/07/2026 10:09:01 |
+| D:\bing\MC\mcmoderr-my\mc-shili\libraries\io\mirage\mirage-launch\0.1.0\mirage-launch-0.1.0.jar | 2.78 MB（2916558 字节） |
+| 修改时间 | 11/07/2026 11:46:17 |
 
 ## 本次测不了的维度
 
@@ -471,12 +708,10 @@
 - S7 分段（缺 s7.begin, s7.pre）
 - 早期窗口交接（缺 early.handoff.begin, early.handoff.lock, early.handoff.thread, early.handoff.done）
 - TitleScreen 锚点（缺 titlescreen）
+- 早期窗口交接（缺 early.handoff.lock）
 
 > 说明：缺锚点通常意味着**部署的 jar 比源码旧**——锚点由 `io.mirage.loader.MiragePerf` 打出，
 > 需要重新构建并部署 fat jar 后再启动一次游戏才有数据。
-
-
----
 
 ## 本轮核对说明（2026-11-07 人工追加，非脚本产物）
 
@@ -490,6 +725,10 @@
 - **写盘期间日志又增长了**：写盘时 `mirage-launch.log` 里新增了 10:15:36 与 10:16:02 两次启动，都是 16 锚点齐全，因此一并进了总览（会话 15 / 16）。09:45 那次仍是**会话 14**，编号未变。**这两次是否影响「进世界 8~30s 自断」的手测判定由用户拍板，本轮不代判。**
 - **体积行的口径**：脚本读的是**当次运行时磁盘上那一份** `mirage-launch-0.1.0.jar`（2 910 948 字节，修改时间 2026-11-07 10:09），并非 09:45 那次启动所加载的 jar。两者不是同一份构建产物，不要把该行当成 09:45 会话的实测体积（时间线三方对齐，见 `AGENTS.md` 技术注意事项 §5）。
 - **报告未改脚本、未改任何 `.java`**：纯观测，零代码改动。
+- **【2026-11-07 12:52 补】口径段已进生成器**：顶部「## 口径：绝对值是单次样本，不能当阈值」由脚本 `Format-DispersionSection` 生成，**不再是手写段** ⇒ 下次 `-OutFile` 不会再把这句话丢掉。本批 14 个带 `titlescreen` 的会话：最小 **12030 ms** / 中位数 **23598 ms** / 最大 **33160 ms**，跨度 **2.8 倍**，与台账「六次同产物 13781~27638 ms、跨度 2 倍」互相印证 ⇒ 绝对耗时**不可当阈值/回归判据**。
+- **【2026-11-07 12:52 补】自检扩到 33 条**：原先 26 条，本轮新增离散度 7 条（只统计有 `titlescreen` 的会话、min/median/max/倍率、无样本返回 `null` 而非 0、口径段必须含「不能当阈值」与倍率）。变异检验两次确认非白写：去掉 null 过滤 → 红 6 条；口径标题改词 → 红 1 条。
+- **【2026-11-07 12:52 补】总览已增至 25 个会话**：12:00 / 12:44 / 12:45 / 12:47 又各启动一次（用户实机），09:45 那次仍是**会话 14**、编号未变。会话 21 起的 `锚点` 列出现 18/17，是因为 `titlescreen` 同帧被打多行（18 = 15 个不同标签 + 3 行重复）加上新埋点 `s6.patch` / `s6.close`，**不是**判定口径变化。
+- **【2026-11-07 12:52 补】`s6.patch` / `s6.close` 报了但没算**：这两个锚点（包住 `window.refreeze()` 注册表重新冻结）自 11:34 后的包开始输出，但脚本既没定义对应段、也没进必需组 ⇒ 等于白埋。**本轮不擅自扩段定义**（会把「10 条段」的既有口径改成 11 条并让旧会话多一行「缺锚点」），已记入待核对清单待裁决。
 
 ---
 
