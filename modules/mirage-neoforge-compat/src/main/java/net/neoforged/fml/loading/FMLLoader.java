@@ -20,9 +20,29 @@ import io.mirage.api.version.VersionMasks;
 public final class FMLLoader {
 
     private static final VersionInfo VERSION_INFO = new VersionInfo();
+    private static final FMLLoader CURRENT = new FMLLoader();
 
     public static VersionInfo versionInfo() {
         return VERSION_INFO;
+    }
+
+    /** 真实签名：{@code FMLLoader.getCurrent()}（FerriteCore 用它拿 LoadingModList）。 */
+    public static FMLLoader getCurrent() {
+        return CURRENT;
+    }
+
+    /** 真实签名：{@code FMLLoader.getCurrentOrNull()}（JEI 用）。当前进程恒有实例。 */
+    public static FMLLoader getCurrentOrNull() {
+        return CURRENT;
+    }
+
+    /** 开发/生产标识；MG 场景恒 false（与 {@link FMLEnvironment#isProduction()} 对齐）。 */
+    public boolean isProduction() {
+        return false;
+    }
+
+    public LoadingModList getLoadingModList() {
+        return LoadingModList.get();
     }
 
     private FMLLoader() {}

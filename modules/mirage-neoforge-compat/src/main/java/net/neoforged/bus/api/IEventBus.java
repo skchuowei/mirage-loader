@@ -25,6 +25,14 @@ public interface IEventBus {
 
     <T extends Event> void addListener(EventPriority priority, boolean receiveCancelled, Class<T> eventType, Consumer<T> consumer);
 
+    /**
+     * 便捷重载：只声明「是否接收已取消事件」+ 事件类型（JEI 用这个签名）。
+     * 默认走 NORMAL 优先级，避免每个实现都得重复写一遍。
+     */
+    default <T extends Event> void addListener(boolean receiveCancelled, Class<T> eventType, Consumer<T> consumer) {
+        addListener(EventPriority.NORMAL, receiveCancelled, eventType, consumer);
+    }
+
     /** 派发事件，按事件类型的继承层次分发。返回是否有至少一个监听器被调用。 */
     boolean post(Event event);
 

@@ -1,5 +1,5 @@
 {
-    "generatedAt":  "2026-11-07 14:52:37",
+    "generatedAt":  "2026-11-07 15:43:46",
     "reference":  "D:\\bing\\MC\\mcmoderr-my\\mirage-loader\\modules\\mirage-neoforge-compat\\build\\classes\\java\\main",
     "mods":  {
                  "jei-26.2-neoforge-30.48.0.244.jar":  {
@@ -8,8 +8,6 @@
                                                                     ],
                                                            "missing":  [
                                                                            "net/neoforged/neoforge/fluids/FluidStack",
-                                                                           "net/neoforged/api/distmarker/Dist",
-                                                                           "net/neoforged/neoforge/common/NeoForge",
                                                                            "net/neoforged/neoforge/event/OnDatapackSyncEvent",
                                                                            "net/neoforged/neoforge/client/event/AddClientReloadListenersEvent",
                                                                            "net/neoforged/neoforge/client/event/RegisterClientTooltipComponentFactoriesEvent",
@@ -22,8 +20,6 @@
                                                                            "net/neoforged/neoforge/client/event/RegisterClientCommandsEvent",
                                                                            "net/neoforged/neoforge/event/server/ServerAboutToStartEvent",
                                                                            "net/neoforged/neoforge/event/server/ServerStartedEvent",
-                                                                           "net/neoforged/fml/loading/FMLPaths",
-                                                                           "net/neoforged/fml/event/IModBusEvent",
                                                                            "net/neoforged/neoforge/client/settings/IKeyConflictContext",
                                                                            "net/neoforged/neoforge/client/settings/KeyModifier",
                                                                            "net/neoforged/neoforge/client/settings/KeyConflictContext",
@@ -35,20 +31,13 @@
                                                                            "net/neoforged/neoforge/network/handling/IPayloadContext",
                                                                            "net/neoforged/neoforge/network/registration/HandlerThread",
                                                                            "net/neoforged/neoforge/common/brewing/BrewingRecipe",
-                                                                           "net/neoforged/fml/ModContainer",
-                                                                           "net/neoforged/neoforgespi/language/IModInfo",
                                                                            "net/neoforged/neoforge/client/gui/IConfigScreenFactory",
-                                                                           "net/neoforged/fml/ModList",
                                                                            "net/neoforged/neoforge/client/fluid/FluidTintSource",
                                                                            "net/neoforged/neoforge/transfer/fluid/FluidUtil",
                                                                            "net/neoforged/neoforge/fluids/crafting/display/FluidStackContentsFactory",
                                                                            "net/neoforged/neoforge/common/extensions/IItemExtension",
                                                                            "net/neoforged/neoforge/common/extensions/TooltipFlagExtension",
                                                                            "net/neoforged/neoforge/client/ClientTooltipFlag",
-                                                                           "net/neoforged/neoforgespi/language/IModFileInfo",
-                                                                           "net/neoforged/neoforgespi/locating/IModFile",
-                                                                           "net/neoforged/fml/jarcontents/JarContents",
-                                                                           "net/neoforged/neoforgespi/language/IConfigurable",
                                                                            "net/neoforged/neoforge/client/extensions/common/IClientItemExtensions$FontContext",
                                                                            "net/neoforged/neoforge/client/extensions/common/IClientItemExtensions",
                                                                            "net/neoforged/neoforge/client/extensions/common/IClientMobEffectExtensions",
@@ -95,11 +84,7 @@
                                                                 7
                                                             ],
                                                    "missing":  [
-                                                                   "net/neoforged/fml/loading/FMLPaths",
-                                                                   "net/neoforged/fml/loading/FMLEnvironment",
-                                                                   "net/neoforged/api/distmarker/Dist",
-                                                                   "net/neoforged/neoforge/client/gui/IConfigScreenFactory",
-                                                                   "net/neoforged/fml/ModContainer"
+                                                                   "net/neoforged/neoforge/client/gui/IConfigScreenFactory"
                                                                ]
                                                },
                  "ferritecore-9.0.0-neoforge.jar":  {
@@ -107,9 +92,7 @@
                                                                      5
                                                                  ],
                                                         "missing":  [
-                                                                        "net/neoforged/fml/loading/FMLPaths",
-                                                                        "net/neoforged/fml/loading/LoadingModList",
-                                                                        "net/neoforged/fml/loading/moddiscovery/ModInfo"
+
                                                                     ]
                                                     }
              }

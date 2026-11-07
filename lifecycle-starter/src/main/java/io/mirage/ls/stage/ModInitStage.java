@@ -94,6 +94,20 @@ public final class ModInitStage implements Stage {
             // 脚本 host 句柄：P1 的 /mgs reload 要拿它重载（先存着，本阶段只负责加载）
             List<Object> scriptHosts = new ArrayList<>();
 
+            // ---- N1：NeoForge 链接期静态态（FMLPaths / FMLEnvironment / ModList）----
+            // 必须早于任何 mod 类加载（Cloth Config 的静态初始化就会调 FMLEnvironment.getDist()）。
+            // neo 类由 MirageClassLoader 加载，LS 只能反射进入（见 NeoCompatBridge 注释），
+            // 否则 FMLPaths/ModList 会出现 app/MCL 两份静态态。
+            Object neoDist = null;
+            try {
+                NeoCompatBridge.init(mcl, ctx.gameDir(), dist.name(), mods);
+                neoDist = NeoCompatBridge.dist(mcl);
+                MirageLog.MIRAGE.debug("[NeoCompat] 链接期静态态已初始化: dist=" + dist
+                        + ", mods=" + mods.size());
+            } catch (Throwable t) {
+                MirageLog.MIRAGE.warn("NeoForge 链接期静态态初始化失败（构造注入降级为无参）", t);
+            }
+
             // 实例化每个 Mod 的入口类，按 entrypoints 反射调用 onInitialize()/onInitializeClient()
             // 进度区间 45% ~ 65%，按 mod 数量线性推进
             int modIdx = 0;
@@ -175,9 +189,13 @@ public final class ModInitStage implements Stage {
                             + mod.manifest.id + " -> " + clsName);
                     try {
                         Class<?> cls = Class.forName(clsName, true, mcl);
-                        Object instance = NeoLifecycle.constructModInstance(cls, mod.fromNeoForge);
-                        // P1.5：标记当前活跃 modId，供 ModLoadingContext.registerConfig 推断
-                        net.neoforged.fml.ModLoadingContext.setActiveMod(mod.manifest.id);
+                        Object neoContainer = mod.fromNeoForge
+                                ? NeoCompatBridge.container(mcl, mod.manifest.id) : null;
+                        Object instance = NeoLifecycle.constructModInstance(
+                                cls, mod.fromNeoForge, neoDist, neoContainer);
+                        // P1.5：标记当前活跃 modId，供 ModLoadingContext.registerConfig 推断。
+                        // 必须走 MCL 那一份静态态（LS 直接写 app 副本对 mod 不可见）。
+                        NeoCompatBridge.setActiveMod(mcl, mod.manifest.id);
 
                         // 把入口类挂到事件总线，使 @SubscribeEvent 方法生效
                         eventBus.register(instance);

@@ -30,23 +30,31 @@ public final class NeoLifecycle {
     }
 
     /**
-     * 实例化 mod 主类：优先无参构造；NeoForge mod 无可用无参构造时，
-     * 回退到 {@code public MyMod(net.neoforged.bus.api.IEventBus modBus)} 注入式构造
-     * （NeoForge 4.x 标准写法）。
+     * 实例化 mod 主类：按 NeoForge 支持的构造签名选择（见 {@link ModConstructorPicker}）。
+     *
+     * <p>支持 {@code ()} / {@code (IEventBus)} / {@code (IEventBus, Dist)} /
+     * {@code (IEventBus, ModContainer)} / {@code (IEventBus, ModContainer, Dist)}。
+     * {@code dist} / {@code container} 由 S6 从 MCL 侧取到（见 {@link NeoCompatBridge}）；
+     * 任一为 null 时选择器会跳过对应签名，不会把 null 传进 mod 构造器。
      */
-    public static Object constructModInstance(Class<?> cls, boolean fromNeoForge) throws Exception {
-        try {
-            return cls.getDeclaredConstructor().newInstance();
-        } catch (NoSuchMethodException nsme) {
-            if (!fromNeoForge) throw nsme;
+    public static Object constructModInstance(Class<?> cls, boolean fromNeoForge, Object dist, Object container)
+            throws Exception {
+        Object modBus = null;
+        if (fromNeoForge) {
             ClassLoader cl = cls.getClassLoader();
             Class<?> busCls = Class.forName("net.neoforged.bus.api.IEventBus", false, cl);
             Object ctx = Class.forName("net.neoforged.fml.javafmlmod.FMLJavaModLoadingContext", true, cl)
                     .getMethod("get").invoke(null);
-            Object modBus = busCls.cast(ctx.getClass().getMethod("getModEventBus").invoke(ctx));
-            MirageLog.MIRAGE.debug(cls.getName() + " 使用 IEventBus 注入式构造");
-            return cls.getConstructor(busCls).newInstance(modBus);
+            modBus = busCls.cast(ctx.getClass().getMethod("getModEventBus").invoke(ctx));
         }
+        ModConstructorPicker.Match match = ModConstructorPicker.pick(cls, modBus, dist, container);
+        if (match == null) {
+            throw new NoSuchMethodException("找不到可用构造器: " + cls.getName()
+                    + "（支持 无参 / (IEventBus) / (IEventBus, Dist) / (IEventBus, ModContainer)"
+                    + " / (IEventBus, ModContainer, Dist)）");
+        }
+        MirageLog.MIRAGE.debug(cls.getName() + " 使用构造签名 " + match.signature());
+        return match.constructor.newInstance(match.args);
     }
 
     /**

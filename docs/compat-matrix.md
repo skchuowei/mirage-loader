@@ -14,14 +14,15 @@
 
 ## N0 基线（3 个真实 mod，2026-11-07）
 
-| mod | 版本 | jar | 大小 | 引用 | 缺失 | 覆盖率 | 门禁角色 | 链接期状态 |
+| mod | 版本 | jar | 大小 | 引用 | 缺失 | 覆盖率 | 门禁角色 | 链接期状态（N1 后） |
 |---|---|---|---|---|---|---|---|---|
-| FerriteCore | 9.0.0 | `ferritecore-9.0.0-neoforge.jar` | 70 KB | 5 | 3 | 40% | 门禁 A（Mixin/coremod 型） | 未加载 |
-| Cloth Config | 26.2.155 | `cloth-config-26.2.155.jar` | 1109 KB | 7 | 5 | 28.6% | 门禁 A（配置/API 型） | 未加载 |
-| JEI | 30.48.0.244 | `jei-26.2-neoforge-30.48.0.244.jar` | 4638 KB | 92 | 81 | 12% | 门禁 B（压力样本） | 未加载 |
+| FerriteCore | 9.0.0 | `ferritecore-9.0.0-neoforge.jar` | 70 KB | 5 | **0** | **100%** | 门禁 A（Mixin/coremod 型） | **链接期已闭合**（N1） |
+| Cloth Config | 26.2.155 | `cloth-config-26.2.155.jar` | 1109 KB | 7 | **1** | **85.7%** | 门禁 A（配置/API 型） | 仅缺 `IConfigScreenFactory`（N3） |
+| JEI | 30.48.0.244 | `jei-26.2-neoforge-30.48.0.244.jar` | 4638 KB | 92 | **70** | **23.9%** | 门禁 B（压力样本） | 缺 70（client 53 + 其余 17） |
 
-**JEI 81 个缺失的包分布**：`neoforge/client/*` 53、`neoforge` 其余 16、`neoforgespi` 6、`fml` 5、`api.distmarker` 1。
-**主类构造签名**：JEI = `(IEventBus, Dist)`；Cloth Config / FerriteCore = 无参。`NeoLifecycle` 当前只支持无参与 `(IEventBus)`。
+**N1 前 → 后**：81 → 70（JEI）、5 → 1（Cloth）、3 → 0（Ferrite）；基线 `docs/neo-api-surface-baseline.json` 已同步更新。
+**JEI 70 个缺失的包分布**：`neoforge/client/*` 53、`neoforge/common` 5、`neoforge/event` 3、`neoforge/fluids` 4、`neoforge/network` 2、`neoforge/transfer` 1、`neoforgespi` 2（`fml` 已清零）。
+**主类构造签名**：JEI = `(IEventBus, Dist)`；Cloth Config / FerriteCore = 无参。N1 后 `NeoLifecycle` 已支持 `()` / `(IEventBus)` / `(IEventBus, Dist)` / `(IEventBus, ModContainer)` / `(IEventBus, ModContainer, Dist)`（见 `ModConstructorPicker`）。
 
 ## 门禁样本
 
@@ -48,9 +49,9 @@ Modrinth 上 26.2 + neoforge 的构建共 7769 个，以下仅为首批候选，
 
 | mod | 构造 | @SubscribeEvent | 注册（item/tab） | 全链路 | 备注 |
 |---|---|---|---|---|---|
-| FerriteCore | | | | | 5 个 `[[mixins]]` 当前一个都不加载 |
-| Cloth Config | | | | | `META-INF/accesstransformer.cfg` 当前不应用 |
-| JEI | | | | | 主类构造签名不匹配；client 事件缺 53 类 |
+| FerriteCore | | | | | N1 后链接期 0 缺；但 5 个 `[[mixins]]` 仍未加载（N2） |
+| Cloth Config | | | | | N1 后只缺 `IConfigScreenFactory`（N3）；AT 仍未应用（N2） |
+| JEI | | | | | 构造签名已支持；client 事件缺 53 类（N3） |
 
 ## 期望日志锚点
 
