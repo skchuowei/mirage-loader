@@ -1,0 +1,10 @@
+modLoader="javafml"
+loaderVersion="[1,)"
+license="MIT"
+
+[[mods]]
+modId="msrprobe"
+version="1.0.0"
+displayName="MSR Probe"
+authors="Mirage"
+description="Synthetic probe mod for MSR P3 verification: registers 1 block + 1 item and subscribes 1 mod-bus + 1 game-bus event. Ground truth is defined by the source."

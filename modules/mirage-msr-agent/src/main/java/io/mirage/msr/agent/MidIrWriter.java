@@ -5,10 +5,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 
 /**
@@ -28,6 +31,9 @@ import java.util.TreeMap;
  * 带 mod 的实例跑一次 = 录制；两者求差 = 「这个 mod 引入的注册 id / 事件订阅」。
  * <b>求差必须做</b>：不做求差的话，输出里全是原版内容，mod 的部分被淹没。
  *
+ * <p><b>原子写</b>：写临时文件再 {@code ATOMIC_MOVE} 覆盖 —— 运行器会周期落盘，
+ * 若写到一半被强杀，读者要么看到旧完整文件、要么看到新完整文件，不会看到半截 JSON。
+ *
  * <p><b>不引入 JSON 库</b>：agent 是构建期工具，多带一个依赖就多一份 classpath 负担。
  * 这里手写最小 JSON 序列化（只处理本模块自己产出的数据结构，结构固定，不需要通用序列化器）。
  */
@@ -35,8 +41,13 @@ public final class MidIrWriter {
 
     private MidIrWriter() {}
 
+    /** IR 文件名（基线 / 录制）。 */
+    public static String fileName(boolean baseline) {
+        return baseline ? "baseline.mirage.json" : "recording.mirage.json";
+    }
+
     /**
-     * 落盘观测结果。
+     * 落盘观测结果（原子写）。
      *
      * @param outDir        输出目录
      * @param baseline      是否基线实例（基线文件名不同，便于后续求差）
@@ -48,9 +59,16 @@ public final class MidIrWriter {
                              List<RecorderAgent.Subscription> subscriptions) throws IOException {
         Path dir = Paths.get(outDir == null || outDir.isBlank() ? "mirage-msr-out" : outDir);
         Files.createDirectories(dir);
-        Path file = dir.resolve(baseline ? "baseline.mirage.json" : "recording.mirage.json");
+        Path file = dir.resolve(fileName(baseline));
         String json = toJson(baseline, registrations, subscriptions);
-        Files.writeString(file, json, StandardCharsets.UTF_8);
+        Path tmp = dir.resolve(fileName(baseline) + ".tmp");
+        Files.writeString(tmp, json, StandardCharsets.UTF_8);
+        try {
+            Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException e) {
+            // 某些文件系统不支持原子移动，退化为普通替换
+            Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
+        }
         System.out.println("[MSR-P3] 观测结果已写出: " + file
                 + "（注册 " + registrations.size() + " / 订阅 " + subscriptions.size() + "）");
     }
@@ -85,9 +103,51 @@ public final class MidIrWriter {
             if (i < subscriptions.size() - 1) sb.append(',');
             sb.append('\n');
         }
-        sb.append("  ]\n");
+        sb.append("  ],\n");
+        sb.append("  \"stats\": ");
+        sb.append(statsJson(registrations, subscriptions));
+        sb.append('\n');
         sb.append("}\n");
         return sb.toString();
+    }
+
+    /** 统计段：规模、去重数、归属分布。 */
+    static String statsJson(List<RecorderAgent.Registration> registrations,
+                            List<RecorderAgent.Subscription> subscriptions) {
+        Set<String> uniqIds = new LinkedHashSet<>();
+        Map<String, Integer> owners = new TreeMap<>();
+        for (RecorderAgent.Registration r : registrations) {
+            uniqIds.add(r.registry() + "|" + r.id());
+            owners.merge(r.owner(), 1, Integer::sum);
+        }
+        Map<String, Integer> eventOwners = new TreeMap<>();
+        Set<String> uniqEvents = new LinkedHashSet<>();
+        for (RecorderAgent.Subscription s : subscriptions) {
+            uniqEvents.add(s.eventType());
+            eventOwners.merge(s.owner(), 1, Integer::sum);
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\n");
+        sb.append("    \"registrations\": ").append(registrations.size()).append(",\n");
+        sb.append("    \"uniqueIds\": ").append(uniqIds.size()).append(",\n");
+        sb.append("    \"subscriptions\": ").append(subscriptions.size()).append(",\n");
+        sb.append("    \"uniqueEvents\": ").append(uniqEvents.size()).append(",\n");
+        sb.append("    \"registrationOwners\": ").append(countMapJson(owners)).append(",\n");
+        sb.append("    \"subscriptionOwners\": ").append(countMapJson(eventOwners)).append("\n");
+        sb.append("  }");
+        return sb.toString();
+    }
+
+    private static String countMapJson(Map<String, Integer> m) {
+        if (m.isEmpty()) return "{}";
+        StringBuilder sb = new StringBuilder("{");
+        boolean first = true;
+        for (Map.Entry<String, Integer> e : m.entrySet()) {
+            if (!first) sb.append(", ");
+            first = false;
+            sb.append(quote(e.getKey())).append(": ").append(e.getValue());
+        }
+        return sb.append('}').toString();
     }
 
     /**
@@ -162,5 +222,23 @@ public final class MidIrWriter {
             m.merge(r.owner() + '|' + r.registry() + '|' + r.id(), 1, Integer::sum);
         }
         return m;
+    }
+
+    /** 便捷：订阅索引（测试用）。 */
+    public static Map<String, Integer> indexSubs(List<RecorderAgent.Subscription> subs) {
+        Map<String, Integer> m = new LinkedHashMap<>();
+        for (RecorderAgent.Subscription s : subs) {
+            m.merge(s.owner() + '|' + s.eventType(), 1, Integer::sum);
+        }
+        return m;
+    }
+
+    /** 便捷：owner 列表（测试用）。 */
+    public static List<String> owners(List<RecorderAgent.Registration> regs) {
+        List<String> out = new ArrayList<>();
+        for (RecorderAgent.Registration r : regs) {
+            out.add(r.owner());
+        }
+        return out;
     }
 }
