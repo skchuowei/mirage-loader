@@ -8,7 +8,9 @@ import io.mirage.loader.NeoForgeModDetector;
 import java.io.File;
 import java.lang.reflect.Constructor;
 import java.net.URL;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -23,6 +25,7 @@ import java.util.Set;
 import java.util.TimeZone;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
+import java.util.stream.Stream;
 
 /**
  * MSR-neo 主控：在隔离沙盒里跑 NeoForge mod 主类的 &lt;clinit&gt; + 构造函数，
@@ -94,10 +97,28 @@ public final class SandboxRecorder {
             // MSR M2：fake 的备用来源 = 本项目自己的 clean-room compat stub。
             // 固定表面只有 19 个类，喂真实 mod 时 100% CNFE；复用 compat stub 后覆盖面随
             // 链接期补齐的 stub 一起扩大（一份代码两处用，不重复维护）。
+            // MSR P4：再挂一级「构建期生成的 fake pack」（-Dmirage.msr.fakepack=<dir>，默认关），
+            // 顺序 compat 在前 —— stub 有真桥接逻辑，不能被生成出来的空架子顶掉。
             // kill switch：-Dmirage.msr.fakeprovider=off 退回"只用固定表面"的老行为。
-            FakeProvider provider = fakeProviderEnabled()
-                    ? new CompatFakeProvider(SandboxRecorder.class.getClassLoader())
-                    : null;
+            FakeProvider provider = null;
+            if (fakeProviderEnabled()) {
+                FakeProvider compat = new CompatFakeProvider(SandboxRecorder.class.getClassLoader());
+                FakeProvider pack = FakePackProvider.fromSystemProperty();
+                if (pack != null) {
+                    MirageLog.MIRAGE.info("[Sandbox] fake pack 生效: "
+                            + ((FakePackProvider) pack).root() + "（"
+                            + ((FakePackProvider) pack).classCount() + " 类）");
+                    provider = chain(compat, pack);
+                } else {
+                    String declared = System.getProperty(FakePackProvider.PROPERTY);
+                    if (declared != null && !declared.isBlank()) {
+                        // 属性给了但目录不存在：不许静默当"没有 pack"，否则会误以为已覆盖
+                        MirageLog.MIRAGE.warn("[Sandbox] -D" + FakePackProvider.PROPERTY
+                                + "=" + declared + " 不是目录，fake pack 未生效");
+                    }
+                    provider = compat;
+                }
+            }
             loader = new SandboxClassLoader(urls, SandboxRecorder.class.getClassLoader(),
                     surface.packages, provider);
 
@@ -315,6 +336,20 @@ public final class SandboxRecorder {
         }
     }
 
+    /**
+     * 把两个 fake 来源串成一条链：先问 {@code first}，没有字节码再问 {@code second}。
+     *
+     * <p>顺序有意义（P4）：compat stub 带真桥接（转发到 MG 的 DeferredRegister 等），
+     * 生成的 fake pack 只是「签名 + 抛 UOE」的空架子。反过来会让本来能用的功能变瘸。
+     */
+    private static FakeProvider chain(FakeProvider first, FakeProvider second) {
+        return name -> {
+            byte[] b = first.findFakeBytes(name);
+            if (b != null && b.length > 0) return b;
+            return second.findFakeBytes(name);
+        };
+    }
+
     // ------------------------------------------------------------------ 全局态
 
     /**
@@ -421,6 +456,30 @@ public final class SandboxRecorder {
                 }
             } catch (Exception ignore) {
                 // 扫不到就退化成"无指纹"，不影响录制
+            }
+
+            // (c) P4 fake pack：生成物必须参与指纹。
+            // 理由：pack 是否存在/包含哪些类，会改变录制结论（missing_fake → stub_incomplete），
+            // 不记进指纹就会让 .mid-cache 拿"上次不支持"的旧结论继续生效。
+            String packDir = System.getProperty(FakePackProvider.PROPERTY);
+            if (packDir != null && !packDir.isBlank()) {
+                Path root = Paths.get(packDir).toAbsolutePath().normalize();
+                if (Files.isDirectory(root)) {
+                    try (Stream<Path> s = Files.walk(root)) {
+                        s.filter(x -> x.toString().endsWith(".class")).sorted().forEach(x -> {
+                            long size;
+                            try {
+                                size = Files.size(x);
+                            } catch (Exception e) {
+                                size = -1;
+                            }
+                            fingerprints.add("pack:" + root.relativize(x).toString().replace('\\', '/')
+                                    + ":" + size);
+                        });
+                    } catch (Exception ignore) {
+                        fingerprints.add("pack:unreadable:" + root);
+                    }
+                }
             }
 
             if (pkgs.isEmpty()) {
