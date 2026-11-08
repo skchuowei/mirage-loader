@@ -56,6 +56,15 @@ public final class RecorderAgent {
     private static volatile boolean baseline =
             Boolean.parseBoolean(System.getProperty("mirage.msr.baseline", "false"));
 
+    /**
+     * 录制期间是否<b>不显示</b>游戏窗口（{@code -Dmirage.msr.hidewindow=false} 可关闭）。
+     *
+     * <p>默认<b>开</b>：P3 必须真跑客户端，但两轮录制（基线 + 录制）里没人需要看画面，
+     * 窗口只会占屏。关掉它的唯一场景是「对着画面排查加载卡住」。
+     */
+    private static volatile boolean hideWindow =
+            !"false".equalsIgnoreCase(System.getProperty("mirage.msr.hidewindow", "true"));
+
     /** 本轮采集到的注册表新增 id（owner → id 列表）。 */
     private static final List<Registration> REGISTRATIONS = Collections.synchronizedList(new ArrayList<>());
 
@@ -106,8 +115,15 @@ public final class RecorderAgent {
         String out = System.getProperty("mirage.msr.out");
         if (out != null && !out.isBlank()) outDir = out;
         baseline = Boolean.parseBoolean(System.getProperty("mirage.msr.baseline", "false"));
+        hideWindow = !"false".equalsIgnoreCase(System.getProperty("mirage.msr.hidewindow", "true"));
 
         instrumentation.addTransformer(new RecorderTransformer(), true);
+        // 窗口隐藏是**独立**的插桩器：它只摘 GLFW.glfwShowWindow，不碰观测点。
+        // 放这里而不是塞进 RecorderTransformer，是为了让「录制」与「看不看得见画面」
+        // 两件事各自可关、各自可测（门禁也分两组断言）。
+        if (hideWindow) {
+            instrumentation.addTransformer(new WindowHideTransformer(), true);
+        }
 
         // 周期快照：超时强杀进程时 shutdown hook 不会执行，只有周期快照能保住数据
         Thread ticker = new Thread(() -> {
@@ -127,7 +143,7 @@ public final class RecorderAgent {
         Runtime.getRuntime().addShutdownHook(new Thread(RecorderAgent::flushQuietly, "mirage-msr-flush"));
 
         System.out.println("[MSR-P3] agent 已安装：out=" + outDir
-                + " baseline=" + baseline);
+                + " baseline=" + baseline + " hideWindow=" + hideWindow);
     }
 
     /**
@@ -282,6 +298,11 @@ public final class RecorderAgent {
         return baseline;
     }
 
+    /** 录制期间是否隐藏游戏窗口（测试 / 诊断用）。 */
+    public static boolean isHideWindow() {
+        return hideWindow;
+    }
+
     /** 已采集的注册记录（测试用）。 */
     public static List<Registration> registrations() {
         return new ArrayList<>(REGISTRATIONS);
@@ -322,6 +343,9 @@ public final class RecorderAgent {
         m.put("observeErrors", OBSERVE_ERRORS.get());
         m.put("flushes", FLUSHES.get());
         m.put("instrumentedClasses", RecorderTransformer.instrumentedClasses());
+        m.put("hideWindow", hideWindow);
+        m.put("showWindowStripped", WindowHideTransformer.strippedCalls());
+        m.put("hiddenClasses", WindowHideTransformer.touchedClasses());
         return m;
     }
 }

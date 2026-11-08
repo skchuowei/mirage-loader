@@ -50,6 +50,8 @@ if (-not $JavaHome) {
 }
 $javaExe = Join-Path $JavaHome "bin\java.exe"
 if (-not (Test-Path $javaExe)) { throw "找不到 java：$javaExe（用 -JavaHome 指定 JDK 25）" }
+$javacExe = Join-Path $JavaHome "bin\javac.exe"
+if (-not (Test-Path $javacExe)) { throw "找不到 javac：$javacExe（用 -JavaHome 指定 JDK 25）" }
 
 $script:checks = 0
 $script:failures = New-Object System.Collections.Generic.List[string]
@@ -128,6 +130,23 @@ foreach ($sw in @('Full', 'Mutation')) {
     $badPattern = "(?m)^\s*\`$$sw\s*=(?!=)"
     Assert-True (-not [regex]::IsMatch((Read-Utf8 $PSCommandPath), $badPattern)) "本脚本内无与 switch 参数 `$$sw 同名的局部变量赋值"
 }
+
+# ---- 录制期不显示窗口（2026-11-08 加）----
+# 背景：P3 必须真跑客户端，但录制时窗口会占屏。窗口「出现」只有一条路：
+# GLFW.glfwShowWindow。agent 把它摘成 POP2；运行器另有一层 OS 兜底并记账。
+Write-Host "-- 静态守卫（录制期不显示窗口）--" -ForegroundColor Yellow
+$hideSrc = Join-Path $agentDir "src\main\java\io\mirage\msr\agent\WindowHideTransformer.java"
+$hd = Read-Utf8 $hideSrc
+Assert-True ($hd.Length -gt 0) '窗口隐藏插桩器存在：WindowHideTransformer.java'
+Assert-Match $hd 'org/lwjgl/glfw/GLFW' '插桩目标只认 GLFW 门面类'
+Assert-Match $hd '"glfwShowWindow"' '摘除目标：glfwShowWindow（窗口出现的唯一路径）'
+Assert-Match $hd 'Opcodes\.POP2' '摘除方式：POP2 吃掉 long 句柄（栈深度不变 ⇒ 不用重算 maxStack）'
+Assert-Match $hd 'mentionsShowWindow' '先做字节级 needle 筛（不为每个类构造 ClassReader）'
+Assert-Match $ag 'new WindowHideTransformer\(\)' 'premain 真的注册了窗口插桩器'
+Assert-Match $ag 'mirage\.msr\.hidewindow' '开关：-Dmirage.msr.hidewindow（默认开）'
+Assert-Match $rnCode '\-Dmirage\.msr\.hidewindow=' '运行器把 hidewindow 开关传给 JVM'
+Assert-Match $rnCode '可见峰值' '运行器对「窗口是否真的出现过」记账（峰值>0 即 agent 失效）'
+Assert-Match $rnCode 'ShowWindow' '运行器带 -ShowWindow 排查开关（要看画面时用）'
 
 # ================================================================= 产物检查
 Write-Host "-- 产物检查 --" -ForegroundColor Yellow
@@ -218,6 +237,116 @@ Assert-True ($newEvCount -eq 1) "新增订阅恰好 1 条（实际 $newEvCount�
 
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 
+# ================================================================= 窗口隐藏行为断言
+# 不开游戏也能验：造一个「真会调 glfwShowWindow」的类（假 GLFW 门面里让它打印
+# SHOW_CALLED），把同一个类的字节码喂给插桩器后再跑一遍：
+#   原始 → 必须打印 SHOW_CALLED（证明探针本身有效，不是空跑）
+#   改写 → 必须不打印，且能跑到 RUN_DONE（证明摘除生效、字节码仍合法可执行）
+# 这是**行为层**断言：只看「调用到底有没有发生」，与源码长什么样无关。
+Write-Host "-- 窗口隐藏行为断言（合成类，秒级）--" -ForegroundColor Yellow
+
+$hideWork = Join-Path $env:TEMP ("msr-p3-hide-" + [guid]::NewGuid().ToString("N"))
+$hideSrcDir = Join-Path $hideWork "src"
+$hideClasses = Join-Path $hideWork "classes"
+$hidePatched = Join-Path $hideWork "patched"
+foreach ($d in @($hideSrcDir, (Join-Path $hideSrcDir "org\lwjgl\glfw"), $hideClasses, $hidePatched)) {
+    New-Item -ItemType Directory -Path $d -Force | Out-Null
+}
+
+# 探针源码刻意全 ASCII：脚本里生成的 .java 不带 BOM，写中文反而容易踩编码坑（C76）
+$glfwStub = @'
+package org.lwjgl.glfw;
+
+public final class GLFW {
+    public static void glfwShowWindow(long handle) {
+        System.out.println("SHOW_CALLED:" + handle);
+    }
+
+    public static void glfwWindowHint(int hint, int value) {
+    }
+}
+'@
+
+$showCase = @'
+public final class ShowCase {
+    public static void show(long handle) {
+        org.lwjgl.glfw.GLFW.glfwShowWindow(handle);
+    }
+}
+'@
+
+$runShow = @'
+public final class RunShow {
+    public static void main(String[] args) {
+        ShowCase.show(7L);
+        System.out.println("RUN_DONE");
+    }
+}
+'@
+
+$hideProbe = @'
+import io.mirage.msr.agent.WindowHideTransformer;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+
+public final class HideProbe {
+    public static void main(String[] args) throws Exception {
+        byte[] orig = Files.readAllBytes(Paths.get(args[0]));
+        byte[] other = Files.readAllBytes(Paths.get(args[1]));
+        Path outDir = Paths.get(args[2]);
+        Files.createDirectories(outDir);
+        System.out.println("probe.needle.orig=" + WindowHideTransformer.mentionsShowWindow(orig));
+        System.out.println("probe.needle.other=" + WindowHideTransformer.mentionsShowWindow(other));
+        System.out.println("probe.other.untouched=" + (WindowHideTransformer.stripShowWindow(other) == null));
+        byte[] patched = WindowHideTransformer.stripShowWindow(orig);
+        System.out.println("probe.orig.changed=" + (patched != null));
+        if (patched != null) {
+            Files.write(outDir.resolve("ShowCase.class"), patched);
+        }
+    }
+}
+'@
+
+$utf8NoBomSrc = New-Object System.Text.UTF8Encoding $false
+[System.IO.File]::WriteAllText((Join-Path $hideSrcDir "org\lwjgl\glfw\GLFW.java"), $glfwStub, $utf8NoBomSrc)
+[System.IO.File]::WriteAllText((Join-Path $hideSrcDir "ShowCase.java"), $showCase, $utf8NoBomSrc)
+[System.IO.File]::WriteAllText((Join-Path $hideSrcDir "RunShow.java"), $runShow, $utf8NoBomSrc)
+[System.IO.File]::WriteAllText((Join-Path $hideSrcDir "HideProbe.java"), $hideProbe, $utf8NoBomSrc)
+
+$sources = @(
+    (Join-Path $hideSrcDir "org\lwjgl\glfw\GLFW.java"),
+    (Join-Path $hideSrcDir "ShowCase.java"),
+    (Join-Path $hideSrcDir "RunShow.java"),
+    (Join-Path $hideSrcDir "HideProbe.java")
+)
+$javacOut = & $javacExe -encoding UTF-8 -nowarn -d $hideClasses -cp $agentJar $sources
+$compiled = Test-Path (Join-Path $hideClasses "ShowCase.class")
+if (-not $compiled) { $javacOut | ForEach-Object { Write-Host "        javac: $_" -ForegroundColor DarkGray } }
+Assert-True $compiled "探针类编译通过（假 GLFW 门面 + ShowCase + RunShow + HideProbe）"
+
+if ($compiled) {
+    $cpOrig = $hideClasses + ";" + $agentJar
+    $beforeOut = (& $javaExe -cp $cpOrig RunShow) -join "`n"
+    # 先证明探针有效：没这一步，「改写后不打印」可能只是因为压根没调用过
+    Assert-True ($beforeOut -match 'SHOW_CALLED:7') "探针有效：原始类确实调用了 glfwShowWindow"
+
+    $probeOut = (& $javaExe -cp $cpOrig HideProbe `
+        (Join-Path $hideClasses "ShowCase.class") (Join-Path $hideClasses "RunShow.class") $hidePatched) -join "`n"
+    Assert-True ($probeOut -match 'probe\.needle\.orig=true') "插桩器识别出含 glfwShowWindow 的类（needle 命中）"
+    Assert-True ($probeOut -match 'probe\.orig\.changed=true') "插桩器真的改写了该类"
+    Assert-True ($probeOut -match 'probe\.needle\.other=false') "无关类不被 needle 误判"
+    Assert-True ($probeOut -match 'probe\.other\.untouched=true') "无关类原样放行（返回 null，不改写）"
+
+    $cpPatched = $hidePatched + ";" + $hideClasses + ";" + $agentJar
+    $afterOut = (& $javaExe -cp $cpPatched RunShow) -join "`n"
+    Assert-True ($afterOut -notmatch 'SHOW_CALLED') "改写后不再调用 glfwShowWindow（窗口不会出现）"
+    Assert-True ($afterOut -match 'RUN_DONE') "改写后的字节码仍可执行（POP2 没弄坏栈/校验）"
+}
+
+Remove-Item $hideWork -Recurse -Force -ErrorAction SilentlyContinue
+
 # ================================================================= 实机（可选）
 if ($Full) {
     Write-Host "-- 实机：真启动 NeoForge 客户端 --" -ForegroundColor Yellow
@@ -247,8 +376,10 @@ if ($Full) {
 
     $diffFile = ""
     $instDir = ""
+    $runTxt = ""
     if (Test-Path $runReport) {
         $txt = [System.IO.File]::ReadAllText($runReport, [System.Text.UTF8Encoding]::new($false))
+        $runTxt = $txt
         $m = [regex]::Match($txt, '实例保留在:\s*(.+)')
         if (-not $m.Success) { $m = [regex]::Match($txt, '实例:\s*(.+)') }
         if ($m.Success) {
@@ -277,6 +408,24 @@ if ($Full) {
         $cnt = ([regex]::Matches($d, '"id"\s*:\s*"msrprobe:')).Count
         Assert-True ($cnt -eq 2) "实机：新增注册项恰好 2 条（实际 $cnt）"
     }
+
+    # ---- 录制期间到底有没有「显示过」窗口（2026-11-08）----
+    # 两层证据，缺一不可：
+    #   1) 运行器采样：可见峰值必须为 0（>0 = 窗口真的出现过，靠 OS 兜底按下，画面会闪）；
+    #   2) IR stats：agent 摘掉的 glfwShowWindow 调用数必须 ≥1（=0 说明插桩压根没接上）。
+    Assert-True ($runTxt.Length -gt 0) "实机：运行器报告可读（窗口证据来自它）"
+    Assert-True ($runTxt -notmatch '可见峰值=[1-9]') "实机：录制全程没有可见窗口（可见峰值 0）"
+    Assert-True ($runTxt -match '可见峰值=0') "实机：两轮都做了窗口采样（不是没采就判 0）"
+    Assert-True ($runTxt -notmatch '\[WARN\] 出现过可见窗口') "实机：没有触发 OS 兜底隐藏（agent 已从源头摘掉）"
+
+    $baseIrFile = Join-Path $instDir "msr-out\msr-baseline\baseline.mirage.json"
+    $stripHit = -1
+    if (Test-Path $baseIrFile) {
+        $bi = [System.IO.File]::ReadAllText($baseIrFile, [System.Text.UTF8Encoding]::new($false))
+        $mm = [regex]::Match($bi, '"showWindowStripped"\s*:\s*(\d+)')
+        if ($mm.Success) { $stripHit = [int]$mm.Groups[1].Value }
+    }
+    Assert-True ($stripHit -ge 1) "实机：agent 摘掉至少 1 处 glfwShowWindow（实际 $stripHit；0 = 插桩没接上）"
 
     # 清理一次性实例（本脚本自己建的，位于 %TEMP%\mirage-msr-*）
     #

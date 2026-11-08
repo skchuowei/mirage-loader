@@ -133,7 +133,11 @@ public final class MidIrWriter {
         sb.append("    \"subscriptions\": ").append(subscriptions.size()).append(",\n");
         sb.append("    \"uniqueEvents\": ").append(uniqEvents.size()).append(",\n");
         sb.append("    \"registrationOwners\": ").append(countMapJson(owners)).append(",\n");
-        sb.append("    \"subscriptionOwners\": ").append(countMapJson(eventOwners)).append("\n");
+        sb.append("    \"subscriptionOwners\": ").append(countMapJson(eventOwners)).append(",\n");
+        // 录制期窗口隐藏的自证：`showWindowStripped` 为 0 ⇒ agent 的窗口插桩没接上
+        // （此时画面能不能不出现只能靠运行器的 OS 层兜底，会闪一下）。
+        sb.append("    \"windowHidden\": ").append(RecorderAgent.isHideWindow()).append(",\n");
+        sb.append("    \"showWindowStripped\": ").append(WindowHideTransformer.strippedCalls()).append("\n");
         sb.append("  }");
         return sb.toString();
     }

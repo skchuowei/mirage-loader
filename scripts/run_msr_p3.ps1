@@ -13,8 +13,12 @@
 #      mc-shili 的 libraries / assets 只**读**；natives **复制**到临时实例
 #      （LWJGL 会往 SharedLibraryExtractPath 解压 dll，直接指过去等于改 mc-shili）。
 #   2. agent 是**构建期工具**，不进 MG fat jar（AGENTS 规则 7.5）。
-#   3. 本脚本会**真的启动 Minecraft 客户端窗口**（NeoForge 客户端无法 headless）。
-#      加载期（mod 注册 / 事件订阅）结束后脚本自动终止进程。
+#   3. 本脚本会真的启动 Minecraft 客户端进程，但**不显示窗口**：
+#      agent 侧摘掉 `GLFW.glfwShowWindow`（见 WindowHideTransformer），
+#      窗口全程停在 GLFW 创建时的 `GLFW_VISIBLE=false` 状态；
+#      运行器另有一层兜底 —— 若仍发现该进程有可见窗口，立刻按下并记进报告
+#      （报告里的「可见峰值」不为 0 就是 agent 失效的信号，不允许静默）。
+#      要看画面排查时加 `-ShowWindow`。
 #   4. 断网运行：--accessToken 0 走离线身份，不连账号服务器。
 #
 # 用法：
@@ -22,6 +26,7 @@
 #   powershell -ExecutionPolicy Bypass -File .\scripts\run_msr_p3.ps1 -ListDeps
 #   powershell -ExecutionPolicy Bypass -File .\scripts\run_msr_p3.ps1 -ModJar <mod jar>
 #   powershell -ExecutionPolicy Bypass -File .\scripts\run_msr_p3.ps1 -ModJar a.jar -ModJar b.jar
+#   powershell -ExecutionPolicy Bypass -File .\scripts\run_msr_p3.ps1 -ModJar a.jar -ShowWindow
 #
 # 退出码：0 通过；1 自检失败 / 依赖缺失 / 实例构建失败 / 未产出 IR。
 
@@ -33,6 +38,8 @@ param(
     [switch]$SelfTest,
     [switch]$ListDeps,
     [switch]$Keep,
+    # 让窗口照常显示（默认隐藏）。只有「要盯着加载画面排查卡住」时才用。
+    [switch]$ShowWindow,
     [int]$TimeoutSec = 150,
     [string]$JavaHome = "",
     [string]$OutDir = "",
@@ -90,6 +97,42 @@ function Fail($msg) {
     $report.Add("FAIL: $msg")
     WriteTextNoBom $ReportFile ($report -join "`n")
     exit 1
+}
+
+# ---------------------------------------------------------------- 窗口隐藏（兜底层）
+# 主手段在 agent 侧（WindowHideTransformer 摘掉 GLFW.glfwShowWindow），这里只是兜底：
+#   1) 若以后 MC/NeoForge 换条路把窗口显示出来，本层保证它不会停在用户屏幕上；
+#   2) **必须记账**：可见峰值 > 0 说明 agent 没生效，报告里要看得见，不能静默掩盖。
+if (-not ("MsrWin32" -as [type])) {
+    Add-Type -Namespace Msr -Name Win32 -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, System.IntPtr lParam);
+public delegate bool EnumWindowsProc(System.IntPtr hWnd, System.IntPtr lParam);
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern uint GetWindowThreadProcessId(System.IntPtr hWnd, out uint lpdwProcessId);
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern bool IsWindowVisible(System.IntPtr hWnd);
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
+'@
+}
+
+# 枚举某进程当前**可见**的顶层窗口。
+# 用 EnumWindows 而不是 Get-Process 的 MainWindowHandle：后者只给「主窗口」一个句柄，
+# 而早期加载画面与游戏主窗口是两个独立窗口，只盯主窗口会漏。
+function Get-VisibleWindowsOf([int]$TargetPid) {
+    $script:msrWinHits = New-Object System.Collections.Generic.List[System.IntPtr]
+    $callback = [Msr.Win32+EnumWindowsProc] {
+        param([System.IntPtr]$hWnd, [System.IntPtr]$lParam)
+        $ownerPid = [uint32]0
+        [void][Msr.Win32]::GetWindowThreadProcessId($hWnd, [ref]$ownerPid)
+        if ($ownerPid -eq $TargetPid -and [Msr.Win32]::IsWindowVisible($hWnd)) {
+            $script:msrWinHits.Add($hWnd)
+        }
+        return $true
+    }
+    [void][Msr.Win32]::EnumWindows($callback, [System.IntPtr]::Zero)
+    return $script:msrWinHits
 }
 
 # 判断 launcher 的 library rules 是否允许当前平台
@@ -178,7 +221,7 @@ if ($SelfTest) {
         Log "[WARN] agent jar 还没构建：$agentJar"
     }
     $src = Join-Path $repo "modules\mirage-msr-agent\src\main\java\io\mirage\msr\agent"
-    foreach ($n in @("RecorderAgent.java", "RecorderTransformer.java", "MidIrWriter.java", "ModIdResolver.java", "BaselineDiffer.java")) {
+    foreach ($n in @("RecorderAgent.java", "RecorderTransformer.java", "WindowHideTransformer.java", "MidIrWriter.java", "ModIdResolver.java", "BaselineDiffer.java")) {
         if (Test-Path (Join-Path $src $n)) { Log "[PASS] 源文件存在: $n" }
         else { Fail "缺源文件: $n" }
     }
@@ -191,6 +234,18 @@ if ($SelfTest) {
     $ag = Get-Content (Join-Path $src "RecorderAgent.java") -Raw -Encoding UTF8
     if ($ag -match "public static void premain\(") { Log "[PASS] premain 签名在位" }
     else { Fail "premain 签名缺失" }
+    # 窗口隐藏的三段接线（源码级）：插桩器盯 glfwShowWindow → premain 挂上 → 运行器带属性
+    $wh = Get-Content (Join-Path $src "WindowHideTransformer.java") -Raw -Encoding UTF8
+    if ($wh -match "glfwShowWindow" -and $wh -match "org/lwjgl/glfw/GLFW" -and $wh -match "POP2") {
+        Log "[PASS] 窗口插桩器：盯 GLFW.glfwShowWindow，摘成 POP2"
+    } else { Fail "WindowHideTransformer 没有正确地盯 glfwShowWindow / POP2" }
+    if ($ag -match "new WindowHideTransformer\(\)") { Log "[PASS] premain 注册了窗口插桩器" }
+    else { Fail "premain 没注册 WindowHideTransformer（窗口会照常显示）" }
+    if ($ag -match "mirage\.msr\.hidewindow") { Log "[PASS] agent 认 -Dmirage.msr.hidewindow 开关" }
+    else { Fail "agent 缺 mirage.msr.hidewindow 开关" }
+    $self = Get-Content $PSCommandPath -Raw -Encoding UTF8
+    if ($self -match "\-Dmirage\.msr\.hidewindow=") { Log "[PASS] 运行器把 hidewindow 属性传给 JVM" }
+    else { Fail "运行器没传 -Dmirage.msr.hidewindow" }
     $settings = Get-Content (Join-Path $repo "settings.gradle.kts") -Raw -Encoding UTF8
     if ($settings -match "mirage-msr-agent" -and $settings -notmatch "launcher:mirage-launch.*mirage-msr-agent") {
         Log "[PASS] agent 是独立模块，未被 fat jar 依赖"
@@ -271,10 +326,17 @@ function Invoke-MsrRun {
     $stdoutFile = Join-Path $runOut "stdout.txt"
     $stderrFile = Join-Path $runOut "stderr.txt"
 
+    # 隐藏窗口的开关以「字符串」传进 JVM：agent 侧按 equalsIgnoreCase("false") 判定。
+    # 注意**不要**在这里引入名为 $showwindow 的局部变量 —— PS 变量名大小写不敏感，
+    # 与 [switch]$ShowWindow 同体，赋字符串会抛「String→SwitchParameter」（见 C79）。
+    $hideFlagText = if ($ShowWindow) { "false" } else { "true" }
+
     $jvmArgs = @(
         "-javaagent:$agentJar",
         "-Dmirage.msr.out=$runOut",
         "-Dmirage.msr.baseline=$($IsBaseline.ToString().ToLower())",
+        # 录制期不显示窗口：agent 会把 GLFW.glfwShowWindow 摘成 POP2
+        "-Dmirage.msr.hidewindow=$hideFlagText",
         "-Xms512M", "-Xmx2G",
         # 默认编码在 Windows 上是 GBK ⇒ 游戏日志里的中文时间戳变乱码（实测）
         "-Dfile.encoding=UTF-8",
@@ -341,9 +403,24 @@ function Invoke-MsrRun {
     $loaded = $false
     $crashed = $false
     $tick = 0
+    # 窗口观测计数：可见峰值 > 0 = agent 没摘干净（画面出现过），必须写进报告
+    $visiblePeak = 0
+    $hiddenForced = 0
     while (-not $p.HasExited) {
         Start-Sleep -Milliseconds 700
         $tick++
+        # 兜底：把该进程当前可见的顶层窗口按下去。窗口一旦被 show 出来就会一直在，
+        # 700ms 的采样间隔足够抓到（早期加载窗口与游戏主窗口都算）。
+        if (-not $ShowWindow) {
+            try {
+                $wins = @(Get-VisibleWindowsOf ([int]$p.Id))
+                if ($wins.Count -gt 0) {
+                    if ($wins.Count -gt $visiblePeak) { $visiblePeak = $wins.Count }
+                    foreach ($hwnd in $wins) { [void][Msr.Win32]::ShowWindow($hwnd, 0) }   # 0 = SW_HIDE
+                    $hiddenForced += $wins.Count
+                }
+            } catch { }
+        }
         if ($tick % 8 -eq 0) {
             $logLines = 0
             try { if (Test-Path $gameLog) { $logLines = (Get-Content $gameLog -ErrorAction SilentlyContinue | Measure-Object).Count } } catch { }
@@ -374,6 +451,15 @@ function Invoke-MsrRun {
         } catch { }
     }
     Log "  等待循环结束（loaded=$loaded crashed=$crashed killed=$killed）"
+    if ($ShowWindow) {
+        Log "  窗口: -ShowWindow 生效（按参数照常显示，不做统计）"
+    } else {
+        # 这一行是「录制不看画面」的自证：峰值 0 ⇒ 窗口从创建到结束都没被显示过
+        Log "  窗口: 可见峰值=$visiblePeak 兜底隐藏=$hiddenForced（峰值 0 = agent 已从源头摘掉 glfwShowWindow）"
+        if ($visiblePeak -gt 0) {
+            Log "  [WARN] 出现过可见窗口 —— agent 的窗口插桩没生效，本轮靠 OS 层兜底按下"
+        }
+    }
     if (-not $p.HasExited) {
         # 注意：Process.Kill(bool) 只在 .NET Core 有，Windows PowerShell 5.1（.NET Framework）
         # 只有无参 Kill() —— 传参会抛 MethodNotFound，必须用无参版。
@@ -388,11 +474,14 @@ function Invoke-MsrRun {
     Log "  退出码: $exitCode（提前终止=$loaded 超时=$killed）"
     Log "  游戏日志: $gameLog"
     $regCount = 0; $subCount = 0
+    $stripCount = -1
     if ($ok) {
         $irText = Get-Content $irFile -Raw
         $regCount = ([regex]::Matches($irText, '"registry"\s*:')).Count
         $subCount = ([regex]::Matches($irText, '"event"\s*:')).Count
-        Log "  [PASS] IR 已产出: $irFile ($((Get-Item $irFile).Length) B) 注册=$regCount 订阅=$subCount"
+        $sm = [regex]::Match($irText, '"showWindowStripped"\s*:\s*(\d+)')
+        if ($sm.Success) { $stripCount = [int]$sm.Groups[1].Value }
+        Log "  [PASS] IR 已产出: $irFile ($((Get-Item $irFile).Length) B) 注册=$regCount 订阅=$subCount 摘show调用=$stripCount"
         if ($regCount -eq 0 -and $subCount -eq 0) {
             # 文件在但一条都没录到 ⇒ 插桩没生效或游戏没跑到注册阶段，不能算成功
             Log "  [FAIL] IR 是空壳（0 注册 0 订阅）—— 插桩未命中或加载未完成"
@@ -405,7 +494,8 @@ function Invoke-MsrRun {
         Log "  --- 游戏日志尾部 ---"
         Get-Content $gameLog -Tail 12 -ErrorAction SilentlyContinue | ForEach-Object { Log "    $_" }
     }
-    return @{ ok = $ok; ir = $irFile; out = $runOut; reg = $regCount; sub = $subCount }
+    return @{ ok = $ok; ir = $irFile; out = $runOut; reg = $regCount; sub = $subCount;
+              visiblePeak = $visiblePeak; hiddenForced = $hiddenForced; stripped = $stripCount }
 }
 
 $baselineResult = $null
