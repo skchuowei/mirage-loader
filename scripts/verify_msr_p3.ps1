@@ -95,11 +95,27 @@ Assert-Match $tr 'net/neoforged/bus/EventBus' '插桩点：net.neoforged.bus.Eve
 Assert-Match $tr 'net/neoforged/bus/EventListenerFactory' '插桩点：EventListenerFactory（@SubscribeEvent 主路径）'
 Assert-True (-not [regex]::IsMatch($tr, 'net/neoforged/bus/api/EventBus')) '不存在的 api.EventBus 引用已清除'
 Assert-Match $tr 'classSlotOfAddListener' 'addListener 的 Class 参数槽位是算出来的（不是硬编码 1）'
+# 2026-11-08 真实 mod 实测：bus 8.0.5 的 addListener(Consumer) 单参重载**不带 Class**，
+# 真正覆盖全部重载的汇聚点是私有 addToListeners(Object owner, Class eventType, ...) ——
+# addListener 各重载与 @SubscribeEvent 自动注册最终都汇到它，且 owner 以参数直接可得。
+Assert-Match $tr 'ADD_TO_LISTENERS_DESC' '插桩点：addToListeners 汇聚点（覆盖全部 addListener 重载 + @SubscribeEvent）'
+Assert-Match $tr 'ADD_TO_LISTENERS_DESC\.equals\(desc\)' 'addToListeners 按完整描述符匹配（不靠猜槽位）'
 
 $ag = Read-Utf8 $recorderSrc
 Assert-Match $ag '(?m)^\s*public static void onRegisterKey' '注册回调入口在位'
 Assert-Match $ag 'resolveByRegistrationId' '注册归属用 namespace（栈回溯在注册点上取不到 mod 帧）'
 Assert-Match $ag 'extractRegistry' '注册表名从 ResourceKey 取（不是硬编码 root）'
+# 2026-11-08 真实 mod 实测：AppleSkin 有 4 条 @SubscribeEvent 订阅被 jade/mezz_config/基线
+# 的同名事件先占位而整条丢失。去重键必须带 owner —— 同一事件被多个 mod 订阅是常态。
+Assert-Match $ag 'SEEN_SUBSCRIPTIONS\.add\(owner \+ "\|" \+ eventType\)' '订阅去重键按 owner|event（只按事件名会吞掉后注册的 mod）'
+Assert-Match $ag 'resolveForInstance\(listener\)' '订阅归属优先取监听器实例的 CodeSource（订阅点栈上全是平台帧）'
+
+# ---- 断言自检（守卫层变异，纯内存、不落盘）----
+# 防止「断言写了但永远为真」：把锚点换回历史 bug 写法，同一断言必须判红。
+# 守卫层（能力有没有接线）用内存副本即可；行为层（算得对不对）才必须落盘重编译。
+$mutSub = $ag.Replace('SEEN_SUBSCRIPTIONS.add(owner + "|" + eventType)', 'SEEN_SUBSCRIPTIONS.add(eventType)')
+Assert-True ($mutSub -ne $ag) '自检：订阅去重键锚点可替换（断言不是空转）'
+Assert-True (-not [regex]::IsMatch($mutSub, 'SEEN_SUBSCRIPTIONS\.add\(owner \+ "\|" \+ eventType\)')) '自检：退回「只看事件名」时该断言判红'
 
 $rs = Read-Utf8 $resolverSrc
 Assert-Match $rs '(?m)^\s*public static String resolveByRegistrationId' 'ModIdResolver 提供 namespace 归属'

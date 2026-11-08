@@ -139,11 +139,26 @@ public final class RecorderTransformer implements ClassFileTransformer {
     }
 
     /**
-     * 在 {@code EventBus.addListener} 的入口插上报调用。
+     * 在 {@code EventBus.addListener} / {@code EventBus.addToListeners} 的入口插上报调用。
      *
-     * <p>只处理「带 Class 参数」的重载（能直接拿到事件类型）：
-     * {@code addListener(Class, Consumer)} 等四种组合。
+     * <p><b>为什么两个都插</b>：{@code addToListeners(Object owner, Class eventType, EventListener, EventPriority)}
+     * 是两条订阅路径的<b>唯一汇聚点</b> ——
+     * {@code addListener(...)} 的全部公有重载最终都汇到它，
+     * {@code @SubscribeEvent} 的自动注册（{@code register(Object)} →
+     * {@code new SubscribeEventListener} → 构造里 {@code EventListenerFactory.create}）之后也汇到它。
+     * 在汇聚点插一次就能同时覆盖两条路，且 owner 直接以参数形式拿到（不必靠栈回溯）。
+     * 但上游重载在版本间会变（本轮实测 bus 8.0.5 的 {@code addListener(Consumer)} 单参重载
+     * 就没有 {@code Class} 参数），所以保留 {@code addListener} 与
+     * {@code EventListenerFactory.create} 两个冗余点做跨版本兜底；
+     * 重复上报由 {@link RecorderAgent#onSubscribeEvent} 按 {@code owner|event} 去重吸收。
      */
+    static final String ADD_TO_LISTENERS_NAME = "addToListeners";
+
+    /** {@code addToListeners} 的确切描述符（槽 1 = owner，槽 2 = 事件类型 Class）。 */
+    static final String ADD_TO_LISTENERS_DESC =
+            "(Ljava/lang/Object;Ljava/lang/Class;Lnet/neoforged/bus/api/EventListener;"
+                    + "Lnet/neoforged/bus/api/EventPriority;)V";
+
     private static byte[] instrumentEventBus(byte[] src) {
         ClassReader cr = new ClassReader(src);
         ClassWriter cw = new ClassWriter(cr, 0);
@@ -152,6 +167,20 @@ public final class RecorderTransformer implements ClassFileTransformer {
             public MethodVisitor visitMethod(int access, String name, String desc,
                                              String signature, String[] exceptions) {
                 MethodVisitor mv = super.visitMethod(access, name, desc, signature, exceptions);
+                if (ADD_TO_LISTENERS_NAME.equals(name) && ADD_TO_LISTENERS_DESC.equals(desc)) {
+                    return new MethodVisitor(Opcodes.ASM9, mv) {
+                        @Override
+                        public void visitCode() {
+                            super.visitCode();
+                            // 先压 typeSource（槽 2 = Class），再压 listener（槽 1 = owner）：
+                            // 与 onSubscribeEvent(Object typeSource, Object listener) 的形参顺序一致。
+                            super.visitVarInsn(Opcodes.ALOAD, 2);
+                            super.visitVarInsn(Opcodes.ALOAD, 1);
+                            super.visitMethodInsn(Opcodes.INVOKESTATIC, AGENT_OWNER,
+                                    "onSubscribeEvent", "(Ljava/lang/Object;Ljava/lang/Object;)V", false);
+                        }
+                    };
+                }
                 if (!"addListener".equals(name)) return mv;
                 int classSlot = classSlotOfAddListener(desc);
                 if (classSlot < 0) return mv;

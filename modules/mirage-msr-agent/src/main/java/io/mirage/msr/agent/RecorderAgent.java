@@ -177,11 +177,18 @@ public final class RecorderAgent {
         try {
             String eventType = extractEventType(typeSource);
             if (eventType == null || eventType.isEmpty()) return;
-            if (!SEEN_SUBSCRIPTIONS.add(eventType)) return;
-            String owner = ModIdResolver.resolve(null);
+            // 归属先看监听器实例的 CodeSource（订阅点上栈里全是平台帧，栈回溯基本恒 unknown），
+            // 取不到再退回栈回溯。
+            String owner = ModIdResolver.resolveForInstance(listener);
             if ("unknown".equals(owner)) {
-                owner = ModIdResolver.resolveForInstance(listener);
+                owner = ModIdResolver.resolve(null);
             }
+            // **去重键必须是 owner|event**：多个 mod 订阅同一个事件是常态。
+            // 只按事件名去重会把后注册的 mod 整条吞掉 —— 2026-11-08 真实 mod 实测踩到：
+            // AppleSkin 有 4 条 @SubscribeEvent 订阅（RenderTooltipEvent$GatherComponents /
+            // RegisterPayloadHandlersEvent / PlayerLoggedInEvent / ServerTickEvent$Post）
+            // 全被 jade / mezz_config / 基线的同事件先占位而丢失。
+            if (!SEEN_SUBSCRIPTIONS.add(owner + "|" + eventType)) return;
             SUBSCRIPTIONS.add(new Subscription(owner, eventType));
         } catch (Throwable t) {
             OBSERVE_ERRORS.incrementAndGet();
