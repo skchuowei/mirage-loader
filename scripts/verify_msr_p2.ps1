@@ -141,6 +141,7 @@ public final class MsrP2Check {
         Path work = Paths.get(args[0]);
 
         policy();
+        policyM4();
         cache(work);
         passive();
         masq();
@@ -169,6 +170,69 @@ public final class MsrP2Check {
                 + " skip=" + skip.record() + ":" + skip.reason()
                 + " already=" + already.record() + ":" + already.reason()
                 + " nullDetected=" + bad.record() + ":" + bad.reason());
+    }
+
+    // --------------------------------------- 1b. M4 判据（P2 断言同步的目标）
+
+    /**
+     * M4：区间不完整不再无条件录；已因「加载器能力不足」失败过的 mod 不再重录。
+     * 两层：① isUnsupportedByLoader 纯函数分类（error 前缀判归属）；
+     *       ② decide 集成判定（含 loaderCapabilityChanged 的进程内指纹首次预热行为）。
+     */
+    private static void policyM4() {
+        NeoForgeModDetector.Detected partial = detected("m_jade", "[26.1,)", null); // 只有 neoforge 区间
+        NeoForgeModDetector.Detected full = detected("m_full", "[26.1,)", "[26.1,27)");
+
+        // M3 写进 Recorded.error 的三类 + 老缓存（无前缀）+ 成功记录
+        MidCache.Recorded missingFake = failedRec("missing_fake: net.neoforged.fml.ModList");
+        MidCache.Recorded stubIncomplete = failedRec("stub_incomplete: net.neoforged.fml.ModContainer#getModId");
+        MidCache.Recorded ctorFailed = failedRec("ctor_failed: java.lang.NullPointerException");
+        MidCache.Recorded legacy = failedRec("net.neoforged.fml.ModList");
+        MidCache.Recorded success = recorded(List.of("a.b.c"), List.of("E"), 1);
+
+        System.out.println("M4CLASS missingFake=" + RecordingPolicy.isUnsupportedByLoader(missingFake)
+                + " stubIncomplete=" + RecordingPolicy.isUnsupportedByLoader(stubIncomplete)
+                + " ctorFailed=" + RecordingPolicy.isUnsupportedByLoader(ctorFailed)
+                + " legacy=" + RecordingPolicy.isUnsupportedByLoader(legacy)
+                + " success=" + RecordingPolicy.isUnsupportedByLoader(success)
+                + " null=" + RecordingPolicy.isUnsupportedByLoader(null));
+
+        System.out.println("M4RANGES partial=" + RecordingPolicy.hasCompleteRanges(partial)
+                + " full=" + RecordingPolicy.hasCompleteRanges(full)
+                + " null=" + RecordingPolicy.hasCompleteRanges(null));
+
+        // loaderCapabilityChanged() 是进程内单例：首次计算指纹返回 true，
+        // 让 PREVIOUSLY_UNSUPPORTED 这一轮不生效（落 ALREADY_RECORDED）。
+        // 连调三次取稳定态，最后一次必然命中 PREVIOUSLY_UNSUPPORTED；
+        // 这样断言不依赖 policy() 的调用顺序（无论此前是否已预热都成立）。
+        RecordingPolicy.Decision d1 = RecordingPolicy.decide("auto", partial, missingFake);
+        RecordingPolicy.Decision d2 = RecordingPolicy.decide("auto", partial, missingFake);
+        RecordingPolicy.Decision d3 = RecordingPolicy.decide("auto", partial, missingFake);
+
+        // 区间不完整但 prev 非空且属 mod 自身问题 ⇒ 同样不录（M4：缺区间不再无条件录）
+        RecordingPolicy.Decision ctorPrev = RecordingPolicy.decide("auto", partial, ctorFailed);
+        RecordingPolicy.Decision legacyPrev = RecordingPolicy.decide("auto", partial, legacy);
+        // force 必须凌驾于「已录过 + 加载器能力不足」之上
+        RecordingPolicy.Decision forced = RecordingPolicy.decide("force", partial, missingFake);
+        // 从未录过 + 区间不完整 ⇒ 仍录一次（诊断价值，M4 保留）
+        RecordingPolicy.Decision firstTime = RecordingPolicy.decide("auto", partial, null);
+
+        System.out.println("M4DECIDE d1=" + d1.record() + ":" + d1.reason()
+                + " d2=" + d2.record() + ":" + d2.reason()
+                + " d3=" + d3.record() + ":" + d3.reason()
+                + " ctorPrev=" + ctorPrev.record() + ":" + ctorPrev.reason()
+                + " legacyPrev=" + legacyPrev.record() + ":" + legacyPrev.reason()
+                + " forced=" + forced.record() + ":" + forced.reason()
+                + " firstTime=" + firstTime.record() + ":" + firstTime.reason());
+
+        System.out.println("M4WHY nonEmpty=" + !d3.why().isEmpty());
+    }
+
+    private static MidCache.Recorded failedRec(String error) {
+        MidCache.Recorded r = recorded(List.of("a.b.c"), List.of("E"), 1);
+        r.failed = true;
+        r.error = error;
+        return r;
     }
 
     // ------------------------------------------------------ 2. 缓存落盘
@@ -487,6 +551,35 @@ Assert-Match $policy 'miss=true:MISSING_RANGES'   "判据：缺版本区间 → 
 Assert-Match $policy 'skip=false:RANGES_COMPLETE' "判据：区间完整 → 不录（P2 核心）"
 Assert-Match $policy 'already=false:ALREADY_RECORDED' "判据：已录过 → 不重录（含上次失败）"
 Assert-Match $policy 'nullDetected=true:MISSING_RANGES' "判据：detected 为 null 不炸，按缺区间处理"
+
+# 1b) M4 判据同步（Reason.PREVIOUSLY_UNSUPPORTED + error 前缀判归属 + 缺区间不再无条件录）
+#     依据 docs/plans/2026-11-07_MSR-完整形态-P0至P4.md 第 161-167 / 206 行：
+#     判据真的变了，旧断言不删，补新分支；「ctor_failed 可重录」在当前实现里
+#     并未单独开分支（一律 ALREADY_RECORDED），此处如实断言现状，见经验文档。
+$m4class = Get-CaseLine $run.Out "M4CLASS"
+Assert-Match $m4class 'missingFake=True'      "M4 分类：missing_fake: 判为加载器能力不足"
+Assert-Match $m4class 'stubIncomplete=True'   "M4 分类：stub_incomplete: 判为加载器能力不足"
+Assert-Match $m4class 'ctorFailed=False'      "M4 分类：ctor_failed: 判为 mod 自身问题（不拦）"
+Assert-Match $m4class 'legacy=False'          "M4 分类：老缓存无前缀按 mod 自身问题处理（保守）"
+Assert-Match $m4class 'success=False'         "M4 分类：成功记录（failed=false）不参与分类"
+Assert-Match $m4class 'null=False'            "M4 分类：prev 为 null 不炸"
+
+$m4ranges = Get-CaseLine $run.Out "M4RANGES"
+Assert-Match $m4ranges 'partial=False'        "M4 区间：只声明 neoforge（Jade/Cloth Config 形态）⇒ 不完整"
+Assert-Match $m4ranges 'full=True'            "M4 区间：两个区间都非空白 ⇒ 完整"
+Assert-Match $m4ranges 'null=False'           "M4 区间：detected 为 null ⇒ 不完整"
+
+$m4dec = Get-CaseLine $run.Out "M4DECIDE"
+Assert-Match $m4dec 'd1=false:(ALREADY_RECORDED|PREVIOUSLY_UNSUPPORTED)' "M4 集成：首轮（指纹预热）不录"
+Assert-Match $m4dec 'd2=false:(ALREADY_RECORDED|PREVIOUSLY_UNSUPPORTED)' "M4 集成：次轮不录"
+Assert-Match $m4dec 'd3=false:PREVIOUSLY_UNSUPPORTED' "M4 集成：指纹稳定后命中 PREVIOUSLY_UNSUPPORTED（不再重录）"
+Assert-Match $m4dec 'ctorPrev=false:ALREADY_RECORDED'  "M4 集成：缺区间 + ctor_failed 已录过 ⇒ 不再无条件录"
+Assert-Match $m4dec 'legacyPrev=false:ALREADY_RECORDED' "M4 集成：老缓存失败记录同样不重录"
+Assert-Match $m4dec 'forced=true:FORCE'      "M4 集成：force 凌驾于 PREVIOUSLY_UNSUPPORTED 之上"
+Assert-Match $m4dec 'firstTime=true:MISSING_RANGES' "M4 集成：从未录过 + 缺区间 ⇒ 仍录一次（诊断价值）"
+
+$m4why = Get-CaseLine $run.Out "M4WHY"
+Assert-Match $m4why 'nonEmpty=True'          "M4 集成：PREVIOUSLY_UNSUPPORTED 的 why() 有可读说明"
 
 # 2) 缓存
 $cFresh = Get-CaseLine $run.Out "CACHE-FRESH"
