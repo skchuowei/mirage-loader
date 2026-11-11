@@ -26,6 +26,9 @@ param(
     [string]$Report = "",
     [string]$Libraries = "",
     [string]$JavaHome = "",
+    [string]$OnlyFile = "",
+    [string]$FromMid = "",
+    [string]$Home = "",
     [switch]$Verify,
     [switch]$Build,
     [switch]$Quiet
@@ -100,6 +103,15 @@ $OutPack = [System.IO.Path]::GetFullPath($OutPack)
 if (-not $Report) { $Report = Join-Path $env:TEMP "msr-fake-pack.report.json" }
 $Report = [System.IO.Path]::GetFullPath($Report)
 
+# P4b（2026-11-11）：按需生成。-FromMid 直接吃 P3 录到的 mid-cache，抽 missing_fake 类当白名单；
+# -OnlyFile 吃一份类名清单。两者可叠加。-Home 指定「fake pack 家目录」——生成器写到这，
+# 录制端靠 -Dmirage.msr.fakepack.home 自动发现，省去每次手填 -Dmirage.msr.fakepack。
+if ($Home) {
+    $Home = [System.IO.Path]::GetFullPath($Home)
+    if (-not $OutPack) { $OutPack = Join-Path $Home "fakepack" }
+    $OutPack = [System.IO.Path]::GetFullPath($OutPack)
+}
+
 $asms = Find-MsrAsmJar
 if (-not $asms) {
     Write-Host "[FAIL] 找不到 ASM（gradle 缓存里没有 org.ow2.asm:asm）" -ForegroundColor Red
@@ -117,6 +129,8 @@ $cliArgs = New-Object System.Collections.Generic.List[string]
 [void]$cliArgs.Add("--ref"); [void]$cliArgs.Add($compatClasses)
 [void]$cliArgs.Add("--out"); [void]$cliArgs.Add($OutPack)
 [void]$cliArgs.Add("--report"); [void]$cliArgs.Add($Report)
+if ($OnlyFile) { [void]$cliArgs.Add("--only-file"); [void]$cliArgs.Add([System.IO.Path]::GetFullPath($OnlyFile)) }
+if ($FromMid) { [void]$cliArgs.Add("--from-mid"); [void]$cliArgs.Add([System.IO.Path]::GetFullPath($FromMid)) }
 foreach ($s in $shapeJars) { [void]$cliArgs.Add("--shape"); [void]$cliArgs.Add($s) }
 if ($Verify) { [void]$cliArgs.Add("--verify") }
 foreach ($m in $mods) { [void]$cliArgs.Add($m) }

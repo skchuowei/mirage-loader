@@ -23,6 +23,7 @@
 [CmdletBinding()]
 param(
     [switch]$RealMods,
+    [switch]$FromMid,
     [switch]$Mutation,
     [string]$JavaHome = "",
     [string]$ReportFile = (Join-Path $env:TEMP "verify_msr_p4.report.txt")
@@ -190,7 +191,7 @@ if ($RealMods) {
         [void]$cli.Add("--out"); [void]$cli.Add($packOut)
         [void]$cli.Add("--verify")
         foreach ($s in $shapeJars) { [void]$cli.Add("--shape"); [void]$cli.Add($s) }
-        foreach ($m in $modJars) { [void]$cli.Add($m) }
+        foreach ($modJar in $modJars) { [void]$cli.Add($modJar) }
 
         $cliOut = & $javaExe -cp "$(Join-Path $repo 'core\mirage-loader\build\classes\java\main');$asmJar" $cli.ToArray() 2>&1 | Out-String
         $cliCode = $LASTEXITCODE
@@ -203,10 +204,10 @@ if ($RealMods) {
         $verifyLines = [regex]::Matches($cliOut, 'neoMissing\s+(\d+)\s*->\s*(\d+)')
         $allZero = $verifyLines.Count -ge 1
         $badLines = New-Object System.Collections.Generic.List[string]
-        foreach ($m in $verifyLines) {
-            if ($m.Groups[2].Value -ne "0") {
+        foreach ($ml in $verifyLines) {
+            if ($ml.Groups[2].Value -ne "0") {
                 $allZero = $false
-                [void]$badLines.Add($m.Value)
+                [void]$badLines.Add($ml.Value)
             }
         }
         Assert-True $allZero ("真实 mod：每个 mod 的 net.neoforged 缺口都归零（{0} 条校验）" -f $verifyLines.Count)
@@ -227,6 +228,139 @@ if ($RealMods) {
         Assert-Match $loadOut 'verifyErr=0' '真实 mod：pack 里 0 个 VerifyError'
         Assert-Match $loadOut 'other=0' '真实 mod：没有其它意外加载错误'
         Assert-Match $loadOut 'total=\d+' '真实 mod：批量加载统计跑起来了（不是空转）'
+    }
+}
+
+# ================================================================= 按需生成（P4b，吃 P3 录到的 mid-cache）
+if ($FromMid) {
+    Write-Host "-- 按需生成（--from-mid 吃 missing_fake 故障清单）--" -ForegroundColor Yellow
+
+    $cacheDir = Join-Path $env:TEMP "msr-mods"
+    $modJars = @()
+    if (Test-Path $cacheDir) {
+        $modJars = @(Get-ChildItem -Path $cacheDir -Filter "*.jar" | Sort-Object Name | ForEach-Object { $_.FullName })
+    }
+    Assert-True ($modJars.Count -ge 1) ("有真实 mod 素材（找到 {0} 个；没有就跑 scripts\fetch_msr_test_mods.ps1）" -f $modJars.Count)
+
+    $asmJar = Find-MsrAsmJar
+    $libraries = Join-Path (Split-Path -Parent $repo) "mc-shili\libraries"
+    $shapeJars = Find-MsrShapeJars $libraries
+    Assert-True ($shapeJars.Count -ge 1) ("找到 NeoForge 形状源（{0} 个）" -f $shapeJars.Count)
+
+    $loaderMain = Join-Path $repo "core\mirage-loader\build\classes\java\main"
+
+    # (1) 用分析器算出这批评测 mod 的真实 neo 缺口集合 M（白名单的"正确答案"）
+    $throw = Join-Path $work "emit-throw"
+    $mFile = Join-Path $work "missing-neo.txt"
+    $emitCli = New-Object System.Collections.Generic.List[string]
+    [void]$emitCli.Add("io.mirage.loader.FakeGenCli")
+    [void]$emitCli.Add("--ref"); [void]$emitCli.Add($compatClasses)
+    [void]$emitCli.Add("--out"); [void]$emitCli.Add($throw)
+    [void]$emitCli.Add("--emit-missing"); [void]$emitCli.Add($mFile)
+    foreach ($s in $shapeJars) { [void]$emitCli.Add("--shape"); [void]$emitCli.Add($s) }
+    foreach ($modJar in $modJars) { [void]$emitCli.Add($modJar) }
+    $emitOut = & $javaExe -cp "$loaderMain;$asmJar" $emitCli.ToArray() 2>&1 | Out-String
+    Assert-Match $emitOut 'emit-missing \d+ 个 neo 缺口' '分析器能吐出真实 neo 缺口集合'
+    if (-not (Test-Path $mFile)) { Assert-True $false "missing-neo.txt 已写出" } else {
+        $M = [System.IO.File]::ReadAllLines($mFile, [System.Text.Encoding]::UTF8) | Where-Object { $_.Trim().Length -gt 0 } | ForEach-Object { $_.Trim() }
+        $M = @($M | Sort-Object)
+        Assert-True ($M.Count -ge 1) ("真实 neo 缺口集合非空（{0} 个，作为按需生成的期望全集）" -f $M.Count)
+    }
+
+    # (2) 把 M 翻成一份合成 mid-cache（每条都是 missing_fake 故障），模拟"P3 录到的真实 MID"
+    $midDir = Join-Path $work "mid-cache"
+    New-Item -ItemType Directory -Force -Path $midDir | Out-Null
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append("[\n")
+    for ($i = 0; $i -lt $M.Count; $i++) {
+        $slash = [string]$M[$i] -replace '\.', '/'
+        [void]$sb.Append(('  {{ "recorded": {{ "failed": true, "error": "missing_fake: NoClassDefFoundError: {0} <- java.lang.NoClassDefFoundError: {0}" }} }}' -f $slash))
+        if ($i + 1 -lt $M.Count) { [void]$sb.Append(',') }
+        [void]$sb.Append("`n")
+    }
+    [void]$sb.Append("]\n")
+    $midFile = Join-Path $midDir "synthetic.json"
+    [System.IO.File]::WriteAllText($midFile, $sb.ToString(), (New-Object System.Text.UTF8Encoding($false)))
+
+    # (3) 按需生成：--from-mid 抽白名单，配合 mods 拿成员 uses
+    $onDemand = Join-Path $work "ondemand-pack"
+    $odCli = New-Object System.Collections.Generic.List[string]
+    [void]$odCli.Add("io.mirage.loader.FakeGenCli")
+    [void]$odCli.Add("--ref"); [void]$odCli.Add($compatClasses)
+    [void]$odCli.Add("--out"); [void]$odCli.Add($onDemand)
+    [void]$odCli.Add("--from-mid"); [void]$odCli.Add($midDir)
+    [void]$odCli.Add("--verify")
+    foreach ($s in $shapeJars) { [void]$odCli.Add("--shape"); [void]$odCli.Add($s) }
+    foreach ($modJar in $modJars) { [void]$odCli.Add($modJar) }
+    $odOut = & $javaExe -cp "$loaderMain;$asmJar" $odCli.ToArray() 2>&1 | Out-String
+    $odCode = $LASTEXITCODE
+    Write-Host ($odOut.Trim()) -ForegroundColor DarkGray
+    Assert-True ($odCode -eq 0) "按需生成退出码 0（实际 $odCode）"
+    Assert-Match $odOut '按需模式：白名单 \d+ 类，命中待生成 \d+ 类' '确实进入了按需模式（白名单驱动，而非全量）'
+    Assert-Match $odOut 'generated=\d+' '按需生成：产出了类'
+    Assert-Match $odOut 'failed=0' '按需生成：没有失败'
+
+    # (4) 闭环：按需 pack 的类集合 == M（不多不少，且每条 verify 都 OK）
+    # 防御：从文件重新读取期望值，避免上游异常影响 $M 状态
+    $expected = @(Get-Content $mFile -Encoding UTF8 | Where-Object { $_.Trim().Length -gt 0 } | Sort-Object)
+    $odClasses = @()
+    if (Test-Path $onDemand) {
+        $odClasses = @(Get-ChildItem -Path $onDemand -Recurse -Filter "*.class" | ForEach-Object {
+            $rel = $_.FullName.Substring($onDemand.Length).TrimStart('\', '/')
+            $rel -replace '\\', '/' -replace '/', '.' -replace '\.class$', ''
+        } | Sort-Object)
+    }
+    $sameSet = ($odClasses.Count -eq $expected.Count)
+    if ($sameSet) {
+        for ($i = 0; $i -lt $expected.Count; $i++) { if ($odClasses[$i] -ne $expected[$i]) { $sameSet = $false; break } }
+    }
+    Assert-True $sameSet ("按需 pack 类集合 == 真实 neo 缺口 M（{0} 个，不多不少）" -f $expected.Count)
+    $okCount = ([regex]::Matches($odOut, 'verify OK   ')).Count
+    Assert-True ($okCount -eq $expected.Count) ("白名单里每个 neo 类都 verify OK（{0}/{1}）" -f $okCount, $expected.Count)
+
+    # (5) 字节级一致：按需 pack 与全量 pack 对 M 中每个类逐字节相同
+    $fullPack = Join-Path $work "full-pack"
+    $fullCli = New-Object System.Collections.Generic.List[string]
+    [void]$fullCli.Add("io.mirage.loader.FakeGenCli")
+    [void]$fullCli.Add("--ref"); [void]$fullCli.Add($compatClasses)
+    [void]$fullCli.Add("--out"); [void]$fullCli.Add($fullPack)
+    foreach ($s in $shapeJars) { [void]$fullCli.Add("--shape"); [void]$fullCli.Add($s) }
+    foreach ($modJar in $modJars) { [void]$fullCli.Add($modJar) }
+    $fullOut = & $javaExe -cp "$loaderMain;$asmJar" $fullCli.ToArray() 2>&1 | Out-String
+    $allSame = $true
+    foreach ($c in $expected) {
+        $rel = $c.Replace('.', '/') + '.class'
+        $a = Join-Path $fullPack $rel; $b = Join-Path $onDemand $rel
+        if (-not (Test-Path $a) -or -not (Test-Path $b)) { $allSame = $false; break }
+        $ba = [System.IO.File]::ReadAllBytes($a); $bb = [System.IO.File]::ReadAllBytes($b)
+        if ($ba.Length -ne $bb.Length) { $allSame = $false; break }
+        for ($i = 0; $i -lt $ba.Length; $i++) { if ($ba[$i] -ne $bb[$i]) { $allSame = $false; break } }
+        if (-not $allSame) { break }
+    }
+    Assert-True $allSame "按需 pack 与全量 pack 对 M 中每个类逐字节相同（按需不是另造一套）"
+
+    # (6) 自动发现：-Dmirage.msr.fakepack.home 能找到 pack，无属性时返回 null
+    $probeOut = Join-Path $work "probe-ondemand"
+    New-Item -ItemType Directory -Force -Path $probeOut | Out-Null
+    # 注意：探针要编译进 loader classes，用 javac 单独编译
+    $fixture = Join-Path $repo "scripts\fixtures\p4-gen-probe"
+    $compileProbe = & $javacExe -encoding UTF-8 -nowarn -cp $loaderMain -d $probeOut (Join-Path $fixture "FakePackProbe.java") 2>&1
+    Assert-True ($LASTEXITCODE -eq 0) "FakePackProbe 编译通过"
+    if ($LASTEXITCODE -eq 0 -and $M.Count -ge 1) {
+        # $M[0] 即点分全限定类名（如 net.neoforged.fml.IExtensionPoint），这正符合
+        # FakeProvider.findFakeBytes 的契约（内部自行 replace('.','/')）。直接传点分形式，
+        # 切勿转成 slash 形式——否则 isAllowed 用 startsWith("net.neoforged.") 判定会失败返回 null。
+        # [string] 转型兜底：规避 PowerShell 变量大小写不敏感导致 $M 被 $m 循环变量冲掉的残留。
+        $known = [string]$M[0]
+        # -D 参数必须整体加引号：PowerShell 的 & 运算符会误把未加引号的 -Dkey=value 当成
+        # 主类参数传给 java（报「找不到或无法加载主类 .msr.fakepack.home=...」）
+        $homeOut = & $javaExe -cp "$probeOut;$loaderMain" "-Dmirage.msr.fakepack.home=$onDemand" probe.FakePackProbe $known 2>&1 | Out-String
+        Write-Host ($homeOut.Trim()) -ForegroundColor DarkGray
+        Assert-Match $homeOut 'PROBE ok classCount=' 'home 自动发现：给了 -Dmirage.msr.fakepack.home 能找到 pack'
+        Assert-Match $homeOut ('PROBE find ' + [regex]::Escape($known) + ' -> \d+ bytes') 'home 自动发现：findFakeBytes 能取到字节码'
+
+        $nullOut = & $javaExe -cp "$probeOut;$loaderMain" probe.FakePackProbe $known 2>&1 | Out-String
+        Assert-Match $nullOut 'PROBE null' '无属性时 fromSystemProperty 返回 null（绝不偷偷扫全盘）'
     }
 }
 

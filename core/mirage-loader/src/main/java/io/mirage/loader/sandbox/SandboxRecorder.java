@@ -97,8 +97,10 @@ public final class SandboxRecorder {
             // MSR M2：fake 的备用来源 = 本项目自己的 clean-room compat stub。
             // 固定表面只有 19 个类，喂真实 mod 时 100% CNFE；复用 compat stub 后覆盖面随
             // 链接期补齐的 stub 一起扩大（一份代码两处用，不重复维护）。
-            // MSR P4：再挂一级「构建期生成的 fake pack」（-Dmirage.msr.fakepack=<dir>，默认关），
+            // MSR P4：再挂一级「构建期生成的 fake pack」（默认关，靠系统属性接入）。
             // 顺序 compat 在前 —— stub 有真桥接逻辑，不能被生成出来的空架子顶掉。
+            // 接入方式（P4b，2026-11-11）：-Dmirage.msr.fakepack=<dir> 显式指定，或
+            // -Dmirage.msr.fakepack.home=<dir> 让生成器写进去、这里自动发现。
             // kill switch：-Dmirage.msr.fakeprovider=off 退回"只用固定表面"的老行为。
             FakeProvider provider = null;
             if (fakeProviderEnabled()) {
@@ -111,10 +113,14 @@ public final class SandboxRecorder {
                     provider = chain(compat, pack);
                 } else {
                     String declared = System.getProperty(FakePackProvider.PROPERTY);
-                    if (declared != null && !declared.isBlank()) {
+                    String home = System.getProperty(FakePackProvider.HOME_PROPERTY);
+                    if ((declared != null && !declared.isBlank())
+                            || (home != null && !home.isBlank())) {
                         // 属性给了但目录不存在：不许静默当"没有 pack"，否则会误以为已覆盖
-                        MirageLog.MIRAGE.warn("[Sandbox] -D" + FakePackProvider.PROPERTY
-                                + "=" + declared + " 不是目录，fake pack 未生效");
+                        String which = (declared != null && !declared.isBlank())
+                                ? "-D" + FakePackProvider.PROPERTY + "=" + declared
+                                : "-D" + FakePackProvider.HOME_PROPERTY + "=" + home;
+                        MirageLog.MIRAGE.warn("[Sandbox] " + which + " 不是目录，fake pack 未生效");
                     }
                     provider = compat;
                 }

@@ -93,14 +93,45 @@ public final class FakeStubGenerator {
     public static Result generate(Set<String> missing,
                                   Map<String, List<FakeGapAnalyzer.Member>> uses,
                                   ShapeSource shapes, Path outDir) throws IOException {
+        return generate(missing, null, uses, shapes, outDir);
+    }
+
+    /**
+     * 生成缺口 stub。
+     *
+     * <p><b>按需模式（P4b）的铁律</b>：{@code missing} 必须是<b>完整缺口集合</b>
+     * （{@code net.neoforged.*} + {@code net.minecraft.*} 一起），绝不能先 {@code retainAll}
+     * 裁掉 mc 再传进来。原因：{@link #resolveSuper} 靠 {@code missingAll} 判定「这是缺失的
+     * mc 超类 → 回落 {@code java/lang/Object}」。若按需把 mc 缺口剔掉，{@code missingAll}
+     * 里就没有那些 mc 类，{@code resolveSuper} 会反过来把它们当「确定存在」写进
+     * {@code superName}——生成的类在链接期直接 {@code NoClassDefFoundError}（而且
+     * {@code --verify} 只查资源存在、不查 defineClass，门禁会侥幸过关）。所以这里把
+     * 「裁窄生成集合」与「完整集合供解析」彻底分开：{@code whitelist} 只缩窄要生成的类，
+     * {@code neoMissing}/{@code missingAll} 永远是全量，保证接口判定、超类递归、mc 回落
+     * 与全量模式<b>逐字节一致</b>（按需不是另造一套）。
+     *
+     * @param missing   完整缺口集合（点分名，neo + mc 都在）
+     * @param whitelist 按需白名单（点分 neo 类名）；{@code null}/空表示全量生成
+     */
+    public static Result generate(Set<String> missing, Set<String> whitelist,
+                                  Map<String, List<FakeGapAnalyzer.Member>> uses,
+                                  ShapeSource shapes, Path outDir) throws IOException {
         Files.createDirectories(outDir);
 
+        // missing 永远是完整缺口集合（neo + mc），供 resolveSuper 判定缺失的 mc 超类回落 Object。
         Set<String> missingAll = new TreeSet<>(missing);
         Set<String> neoMissing = new TreeSet<>();
         List<String> skipped = new ArrayList<>();
         for (String m : missingAll) {
             if (m.startsWith(GENERATED_PREFIX)) neoMissing.add(m);
             else skipped.add(m + " <- 不在生成范围（只做 " + GENERATED_PREFIX + "*）");
+        }
+
+        // 按需：只生成白名单里的 neo 类；但 neoMissing / missingAll 仍是全量，保证接口判定、
+        // 超类递归、mc 回落与全量模式逐字节一致（按需不是另造一套）。
+        Set<String> toGenerate = new TreeSet<>(neoMissing);
+        if (whitelist != null && !whitelist.isEmpty()) {
+            toGenerate.retainAll(whitelist);
         }
 
         List<String> generated = new ArrayList<>();
@@ -113,7 +144,7 @@ public final class FakeStubGenerator {
         // 加载期会 IncompatibleClassChangeError（"can not implement ... it is not an interface"）。
         Set<String> itfDeclared = collectInterfaceDeclarations(neoMissing, uses, shapes);
 
-        for (String name : neoMissing) {
+        for (String name : toGenerate) {
             try {
                 emitClass(name, neoMissing, missingAll, uses, shapes, outDir, done,
                         generated, failed, bytes, false, itfDeclared);

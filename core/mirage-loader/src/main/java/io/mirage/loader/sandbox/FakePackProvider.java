@@ -28,8 +28,18 @@ import java.util.stream.Stream;
  */
 public final class FakePackProvider implements FakeProvider {
 
-    /** 系统属性名：pack 目录。 */
+    /** 系统属性名：显式指定 pack 目录（优先级最高，行为同 2026-11-08 初版）。 */
     public static final String PROPERTY = "mirage.msr.fakepack";
+
+    /**
+     * 系统属性名：fake pack 的「家目录」。
+     *
+     * <p>MSR P4b（2026-11-11）：生成器把按需生成的 pack 写到这个目录后，录制端<b>无需再手填</b>
+     * {@link #PROPERTY} 就能自动发现它。语义是「这个目录本身就是一个 pack」（生成器直接写进
+     * {@code <home>/net/neoforged/...}）。两个属性都没给时返回 {@code null} —— 绝不偷偷扫全盘，
+     * 避免在任何环境里意外加载一份来历不明的 pack 把 classpath 污染了。
+     */
+    public static final String HOME_PROPERTY = "mirage.msr.fakepack.home";
 
     /** 允许的包域：与 {@link CompatFakeProvider} 一致，只这两片。 */
     private static final String[] ALLOWED = { "net.neoforged.", "net.minecraft." };
@@ -48,20 +58,38 @@ public final class FakePackProvider implements FakeProvider {
     }
 
     /**
-     * 按系统属性取 provider。
+     * 按系统属性取 provider。解析顺序：
+     * <ol>
+     *   <li>{@link #PROPERTY} 显式指定 pack 目录（给定但不存在 → 返回 {@code null}，让调用方 WARN）；</li>
+     *   <li>{@link #HOME_PROPERTY} 指定「家目录」，且该目录本身是个 pack（存在且含 .class）→ 用家目录；</li>
+     *   <li>都没给 → 返回 {@code null}（调用方只挂 compat stub）。</li>
+     * </ol>
      *
-     * @return 未配置 / 路径不存在时返回 {@code null}（调用方据此跳过这一级）
+     * @return 解析不到有效 pack 时返回 {@code null}（调用方据此跳过这一级）
      */
     public static FakeProvider fromSystemProperty() {
         String v = System.getProperty(PROPERTY);
-        if (v == null || v.isBlank()) return null;
-        Path p = Paths.get(v);
-        if (!Files.isDirectory(p)) return null;
-        try {
-            return new FakePackProvider(p);
-        } catch (IOException e) {
-            return null;
+        if (v != null && !v.isBlank()) {
+            Path p = Paths.get(v);
+            if (!Files.isDirectory(p)) return null;
+            try {
+                return new FakePackProvider(p);
+            } catch (IOException e) {
+                return null;
+            }
         }
+        String home = System.getProperty(HOME_PROPERTY);
+        if (home != null && !home.isBlank()) {
+            Path hp = Paths.get(home);
+            if (Files.isDirectory(hp)) {
+                try {
+                    return new FakePackProvider(hp);
+                } catch (IOException e) {
+                    return null;
+                }
+            }
+        }
+        return null;
     }
 
     /** pack 里的类文件数（写日志用）。 */
