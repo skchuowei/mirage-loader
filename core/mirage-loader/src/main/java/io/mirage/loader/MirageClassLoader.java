@@ -99,6 +99,17 @@ public class MirageClassLoader extends URLClassLoader {
         // 先读原始字节码
         byte[] original = readClassBytes(name);
         if (original == null) {
+            // MSR W1 路线 A（默认关闭）：只把「真启动实际撞到的 neo 缺口」记账，
+            // 绝不改类加载结果 —— 记完仍走 super.findClass 抛 CNFE。
+            MissingNeoTracker.recordIfEnabled(name);
+            // MSR W1 路线 B（诊断模式，双开关）：只认 net.neoforged. 的窄前缀闸，
+            // 且必须由 MCL 自己 defineClass（与 141 个 compat stub 同一 loader）。
+            // 不进 transformer / Mixin / LoadProgress 管线；资源存在时根本走不到这里，
+            // 故 compat stub 与 26.2.jar 的真 MC 类天然优先，不会撞名。
+            byte[] fake = RuntimeFakePack.findBytesIfEnabled(name);
+            if (fake != null) {
+                return defineClass(name, fake, 0, fake.length);
+            }
             return super.findClass(name);
         }
         // 1) MG 自研 ASM transformer（调试 UI、资源命名空间、创造模式分页等硬编码织入）
