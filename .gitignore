@@ -30,6 +30,9 @@ local.properties
 /io/
 **/dist/
 *.class
+# 例外：MSR W3-C 经 P4b 验证的 neo UOE 骨架（沙盒形状，80 个 net.neoforged.* 类、0 个 mc）
+# 固化进 fat jar 作内置 fallback 资源，必须随源码版本控制；仅限此目录，其余 *.class 仍忽略。
+!modules/mirage-neoforge-compat/src/main/resources/mirage/fakepack/**/*.class
 
 # flock.ps1 运行时状态（会话/锁文件，本地沙盒，不进 git）
 .flock/

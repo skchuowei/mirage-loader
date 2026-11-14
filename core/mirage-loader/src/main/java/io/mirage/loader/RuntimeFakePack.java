@@ -2,7 +2,9 @@ package io.mirage.loader;
 
 import io.mirage.api.log.MirageLog;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -31,9 +33,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 允许 {@code net.minecraft.}，pack 就能遮蔽 {@code 26.2.jar} 里的真 MC 类。
  * 本类另写一份更窄的闸（只认 {@code net.neoforged.}），录制端既有行为一行不改。
  *
- * <p><b>三道闸</b>：{@code -Dmirage.msr.fakepack.home=<dir>}（目录必须存在）+
- * {@code -Dmirage.msr.fakepack.runtime=on} + kill switch
- * {@code -Dmirage.msr.fakeprovider=off} 未设置。三者全满足才启用。
+ * <p><b>三道闸</b>：{@code -Dmirage.msr.fakepack.runtime=on}（必须显式等于 on）+
+ * kill switch {@code -Dmirage.msr.fakeprovider=off} 未设置。两者满足即启用。
+ * pack 来源有两路（任选其一，home 优先）：
+ * <ul>
+ *   <li><b>路线 B（外部目录）</b>：{@code -Dmirage.msr.fakepack.home=<dir>}，从磁盘读；
+ *   <li><b>路线 C（构建期固化）</b>：不设置 home 时，从 fat jar 内置资源
+ *       {@code mirage/fakepack/<点分路径>.class} 读（W3 把 P4b pack 编进了 fat jar，
+ *       运行时不再依赖外部目录）。
+ * </ul>
  * 任何一个不满足时，调用点只读一个静态 boolean 就返回，零 IO / 零日志。
  *
  * <p><b>接线契约</b>（见 W0 计划 §3 路线 B）：字节码必须由
@@ -47,10 +55,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class RuntimeFakePack {
 
-    /** pack 家目录（与录制端 {@code FakePackProvider.HOME_PROPERTY} 同名，语义一致）。 */
+    /** pack 家目录（与录制端 {@code FakePackProvider.HOME_PROPERTY} 同名，语义一致）。可选：
+     *  不设置时走路线 C 内置 pack（fat jar 资源 {@code mirage/fakepack/}）。 */
     public static final String PROPERTY_HOME = "mirage.msr.fakepack.home";
 
-    /** 运行时开关：必须显式等于 {@code on}。只给 home 不生效。 */
+    /** 运行时开关：必须显式等于 {@code on}。只给 home 不生效；home 不给时走内置 pack。 */
     public static final String PROPERTY_RUNTIME = "mirage.msr.fakepack.runtime";
 
     /** kill switch：值为 {@code off} 时整个 fallback 关闭（与 P2 录制端共用）。 */
@@ -61,6 +70,14 @@ public final class RuntimeFakePack {
 
     /** 唯一允许的包域：只认 neo。真 MC 类一律走 {@code 26.2.jar}。 */
     public static final String NEO_PREFIX = "net.neoforged.";
+
+    /**
+     * 路线 C 内置 pack 在 fat jar 里的资源前缀。注意路径是 {@code mirage/fakepack/...}
+     * 而不是 {@code net/neoforged/...} —— 这样 MCL 的 {@code readClassBytes} 不会在常规路径
+     * 下命中它（常规路径只查 {@code net/neoforged/X.class}），保证「默认零变化」与
+     * compat stub 优先；只有本类在 fallback 分支里显式拼这个前缀去读。
+     */
+    public static final String BUILTIN_PREFIX = "mirage/fakepack/";
 
     private static final boolean ENABLED = initEnabled();
     private static final Path ROOT = initRoot();
@@ -73,14 +90,13 @@ public final class RuntimeFakePack {
 
     private static boolean initEnabled() {
         try {
-            String home = System.getProperty(PROPERTY_HOME, "");
             String runtime = System.getProperty(PROPERTY_RUNTIME, "");
             String kill = System.getProperty(PROPERTY_KILL, "");
-            if (home.isBlank() || !"on".equalsIgnoreCase(runtime)) return false;
+            if (!"on".equalsIgnoreCase(runtime)) return false;
             if ("off".equalsIgnoreCase(kill)) return false;
-            return Files.isDirectory(Paths.get(home).toAbsolutePath().normalize());
+            return true;
         } catch (Throwable t) {
-            // 属性读取 / 路径解析异常一律退化为「关闭」，绝不因诊断能力拖垮启动。
+            // 属性读取异常一律退化为「关闭」，绝不因诊断能力拖垮启动。
             return false;
         }
     }
@@ -137,28 +153,65 @@ public final class RuntimeFakePack {
     /**
      * 资源缺失时按需取 fake 字节码。未启用 / 非 neo 前缀 / 文件不存在都返回 {@code null}，
      * 由调用方继续走 {@code super.findClass(name)} 抛 CNFE。
+     *
+     * <p>来源两路：{@code home} 优先（路线 B 磁盘目录）；未设置 home 时走路线 C 内置 pack
+     * （fat jar 资源 {@code mirage/fakepack/}）。两条路都只认 {@code net.neoforged.} 前缀，
+     * 且最终都由调用方（MCL）的 {@code defineClass} 定义，绝不在 app loader 里再出现一份。
      */
     public static byte[] findBytesIfEnabled(String name) {
         if (!ENABLED) return null;
         if (name == null || !name.startsWith(NEO_PREFIX)) return null;
-        if (ROOT == null) return null;
+        if (ROOT != null) {
+            return readFromHome(name);
+        }
+        return readFromBuiltin(name);
+    }
+
+    private static byte[] readFromHome(String name) {
         try {
             Path f = ROOT.resolve(name.replace('.', '/') + ".class").normalize();
             if (!f.startsWith(ROOT) || !Files.isRegularFile(f)) return null;
             byte[] b = Files.readAllBytes(f);
             HITS.add(name);
-            banner();
+            banner("home=" + ROOT);
             return b;
         } catch (IOException | RuntimeException e) {
             return null;
         }
     }
 
-    private static void banner() {
+    /**
+     * 路线 C 内置模式：从 classpath 资源 {@code mirage/fakepack/<点分路径>.class} 读取。
+     * 资源只是数据字节，不会被任何 loader 自动加载成类（路径前缀不是 {@code net/neoforged/}），
+     * 必须由调用方（MCL.findClass）交给 MCL 的 {@code defineClass}，从而与 141 个 compat stub
+     * 落在同一 loader。读字节用 MirageClassLoader 自身的定义 loader（app loader，其 classpath
+     * 含 fat jar），与「必须由 MCL 自己定义」的约束不冲突——这里只取字节，不定义类。
+     */
+    private static byte[] readFromBuiltin(String name) {
+        try {
+            String res = BUILTIN_PREFIX + name.replace('.', '/') + ".class";
+            ClassLoader cl = MirageClassLoader.class.getClassLoader();
+            try (InputStream in = cl.getResourceAsStream(res)) {
+                if (in == null) return null;
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                byte[] buf = new byte[4096];
+                int n;
+                while ((n = in.read(buf)) != -1) bos.write(buf, 0, n);
+                byte[] b = bos.toByteArray();
+                HITS.add(name);
+                banner("builtin=" + BUILTIN_PREFIX);
+                return b;
+            }
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    private static void banner(String src) {
         if (!BANNER_DONE.compareAndSet(false, true)) return;
         MirageLog.LOADER.warn("FAKE MODE 已启用（仅诊断）：pack 只提供 UOE 骨架、"
                 + "mc 超类回落 Object 的沙盒形状，方法调用会抛 UnsupportedOperationException；"
-                + "「加载成功」不代表兼容性结论，禁止作为发布默认。home=" + ROOT);
+                + "「加载成功」不代表兼容性结论，禁止作为发布默认。" + src);
     }
 
     public static int hitCount() { return HITS.size(); }

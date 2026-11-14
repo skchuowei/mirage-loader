@@ -160,7 +160,7 @@ if (-not $SkipGuard) {
 
     Assert-True ($rfp -match '(?m)^\s*public static final String NEO_PREFIX = "net\.neoforged\.";') "GUARD B 前缀常量只认 net.neoforged."
     Assert-True ($rfp -match '(?m)^\s*if \(name == null \|\| !name\.startsWith\(NEO_PREFIX\)\) return null;') "GUARD B findBytes 有窄前缀闸"
-    Assert-True ($rfp -match '(?m)^\s*if \(home\.isBlank\(\) \|\| !"on"\.equalsIgnoreCase\(runtime\)\) return false;') "GUARD B 双开关：runtime=on 必给"
+    Assert-True ($rfp -match '(?m)^\s*if \(!"on"\.equalsIgnoreCase\(runtime\)\) return false;') "GUARD B 双开关：runtime=on 必给（W3-C 起不再硬性要求 home）"
     Assert-True ($rfp -match '(?m)^\s*if \("off"\.equalsIgnoreCase\(kill\)\) return false;') "GUARD B kill switch 未移除"
     Assert-True ($rfp -match 'f\.startsWith\(ROOT\)') "GUARD B 路径归一化后防 .. 逃逸"
     # 注释里也会出现 "ALLOWED ... net.minecraft."（说明为什么不复用），
