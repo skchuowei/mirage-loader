@@ -171,7 +171,11 @@ $sandboxGen = $r1.Generated
 $sandboxSha = Get-PackSha $sandboxPack
 Write-Host ("   generated=" + $sandboxGen + "  sha=" + $sandboxSha.Substring(0,12) + "...")
 Assert-True ($sandboxGen -gt 0) "沙盒缺口 M 非空（generated>0）"
-Assert-True ($sandboxGen -eq 80) ("沙盒缺口 M == 80 个 neo 类（实际 " + $sandboxGen + "）")
+# W3-C1 把 29 个 clean-room 事件类合入 compat 源码后，真实 mod 的 neo 缺口由 80 降为 60。
+# 绝对值会随 compat 面继续演进再变，这里改用「只减不增 + 不超出内置 pack 全集」的相对判据；
+# W2 的核心结论（M_real 与 M_sandbox 逐字节一致）仍在下面第 (3) 段逐字节锁死。
+Assert-True ($sandboxGen -le 114) ("沙盒缺口 M 不超出内置 pack 的 114 类全集（实际 " + $sandboxGen + "）")
+Assert-True ($sandboxGen -lt 80) ("W3-C1 后 compat 面扩大，缺口应少于 W2 基线 80（实际 " + $sandboxGen + "）")
 
 # 0 个 net.minecraft 类；全部 net.neoforged.*
 $mcCount  = Count-McClasses $sandboxPack

@@ -155,3 +155,51 @@ NeoForge / Forge 为 **LGPL 2.1**：C1/C2 只做**行为观察 / 接口签名枚
 C1 阶段按单阶段 commit 整体 `git revert`，保留 C0 文档与 W3-C / real-shape 产物；
 若 C1 只坏在个别类，优先按规则 6「补全/修复」而不是连坐回退整阶段。
 回滚后按规则 6 在 `docs/` 下写回退报告。
+
+---
+
+## C1 实施结论（2026-11-14 追加；上文 C0 原文保留）
+
+> 用户从四档里选「A 档 34 类 (推荐)」后落地。本节只记实际结果与口径修订，不改写上文立项内容。
+
+### 范围修订：34 → 29
+
+上文的 A/B/C 是「方法数 + 名称关键词」的**自动粗分**，没有把 **super / interfaces 依赖闭包**算进去。人审后按「super、itfs、方法描述符引用的 `net.neoforged.*` 是否落在『本清单自身 ∪ compat 已有源码』」复核，剔除 5 个：
+
+| 类 | 阻塞依赖 | 归位 |
+|---|---|---|
+| `FMLLoadCompleteEvent` | `DeferredWorkQueue`（构造签名）、`ParallelDispatchEvent`（超类） | B |
+| `AddClientReloadListenersEvent` | `SortedReloadListenerEvent`（超类） | B |
+| `FluidTintSource` | `FluidStack` | C |
+| `FluidInstance` | `FluidType` | C |
+| `EnergyHandler` | `TransactionContext` | C |
+
+⇒ **C1 实交 29 类 / 25 个 `.java`**（`ClientPlayerNetworkEvent$LoggingIn/LoggingOut`、`ClientTickEvent$Post`、`RenderGuiEvent$Post` 4 个内部类合并进宿主类，保证二进制名与 `getDeclaringClass()` 语义贴近真实 API）。这 5 个本就该归 B/C 档；C3 已裁决 C 档永久不做，B 档等 C2 的真清单。**不是缩水，是修正自动分档误判。**
+
+### 交付
+
+- `scripts/msr_w3c_c1_gen.py`：从 pack 的 real-shape `.class` 读形状/签名，生成 clean-room Java 源码；`--check` 可复算（CHANGED=0）。
+- `modules/mirage-neoforge-compat/src/main/java/net/neoforged/**`：25 个新 `.java`（29 类）。构造器保存实参、0 参 getter 返回真实值、`toString()` 返回类名；其余方法抛 UOE 且消息带「类名#方法名 + 不返回编造值」（N1 原则）。enum 常量由形状源字段还原，并自动补齐所实现接口的抽象方法。
+- `scripts/verify_w3c_c1_events.py` + `scripts/fixtures/fakepack-w3c/C1Probe.java`：**36/36**（守卫层含形状对账 29/29 / 零方法缺失 / 生成器可复算；行为层 29 类 DEFAULT 可加载 + 构造器保留实参 + 两条 UOE 消息 + fallback 默认关闭；2 个落盘重编译变异全红 + 编译路径自检 + 字节级还原 + 基线回绿）。
+- 产物边界：`compileJava` / `fatJar` SUCCESSFUL，fat jar 3 089 637 → **3 109 057** 字节；根路径新增 29 类，内置 pack **仍 114 类 / 0 个 mc 类**，`RuntimeFakePack` 与资源**零改动**。
+
+### 实测收益（不是推断）
+
+| 指标 | C1 前 | C1 后 |
+|---|---|---|
+| 真实 mod 的 neo 缺口（6 个样本） | 80 | **60** |
+| N0 API 表面参考类（neo） | 141 | **170**；JEI「相对基线修复 15 个缺失」 |
+| DEFAULT 可加载的 compat 根路径类 | 6 | **35** |
+| BUILTIN_ON fallback 命中数 | 108 | **79**（29 类改由 compat 直接提供，符合路线 C 目的） |
+
+### 口径同步（唯一需要改的旧门禁）
+
+`verify_fakepack_realstartup.ps1` 原硬编码「沙盒缺口 M == 80」，C1 后实际 60 ⇒ 1 条 FAIL。改为「M ≤ 114（内置 pack 全集）且 M < 80（C1 后应只减不增）」的相对判据；**W2 核心结论 M_real 与 M_sandbox 逐字节一致仍成立**（两边都是 60、sha 相同），第 (3) 段断言未动。其余旧门禁因断言本来就是相对式，全部零改动通过。
+
+### 回归全绿
+
+`verify_w3c_c1_events.py` 36/36；w3_c 33/33；realshape 29/29（含完整变异层）；wiring 90/90 + 变异 7/7；P4 DEFAULT/RealMods/FromMid/Mutation = 37/48/52/45；p2 60/60；p3 53/53 且 `-Full` **64/64**（headless 实机录制、可见窗口峰值 0）；real_mods 27/27；W2 11/11；N0 API 表面 PASS；msr_mutation 全部符合预期。
+
+### 边界不变
+
+仍是**部分实现**：构造器/getter 有真实行为，动作类方法（register / render / enqueueWork 等）抛 UOE，**不返回编造值**；「加载成功 ≠ 兼容性结论」。纯 headless（除 P3 `-Full` 的隐藏窗口录制，按 C93 属可自行启动的 B 类），**未部署 fat jar、未拉可见 GUI、未写 `mc-shili/`**（只读取 `26.2.jar` 等 compileOnly 依赖）。合规：只从真实形状源取类名/签名/继承形状，不抄实现、不把反编译产物写进仓库。C2 仍阻塞于 W1 `MissingNeoTracker` 的实机真清单（需用户双击 `.bat`）。
