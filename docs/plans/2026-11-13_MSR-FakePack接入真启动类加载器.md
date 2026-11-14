@@ -210,7 +210,7 @@ return "java/lang/Object";
 |---|---|---|
 | W0（本轮） | 本设计 + 影响面分析，零代码改动 | — |
 | W1 | 路线 A：缺口探针 + `verify_fakepack_wiring.ps1`（守卫/行为两层变异全红） | 否（纯离线） |
-| W2 | 用真启动 classpath 重算缺口清单，产出「真启动 M」并与 P3 沙盒 M 对账 | 否（纯离线） |
+| W2 | 用真启动 classpath 重算缺口清单，产出「真启动 M」并与 P3 沙盒 M 对账 | 否（纯离线） | **已完成**（2026-11-14）：real-startup M == sandbox M == 80 neo 类，pack 逐字节一致；`verify_fakepack_realstartup.ps1` 10/10；real-shape 增强阻塞于真实 neo jar，列为后续项 |
 | W3 | 路线 C 审 stub / 路线 B 若裁决要开则实现 + 新 `.bat` + 实机对账 | **是**（B 涉及启动游戏） |
 
 ---
