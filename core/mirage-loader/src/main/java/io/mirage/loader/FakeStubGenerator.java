@@ -292,6 +292,13 @@ public final class FakeStubGenerator {
             throws IOException {
         String dotted = internal.replace('/', '.');
         if (dotted.startsWith("java.") || dotted.startsWith("javax.")) return internal;
+        // W3 real-shape（2026-11-14）：net.minecraft.* 超类型一律回落 Object，不论是否在
+        // missingAll 里。旧实现只对「在缺口集合里的 mc」回落；形状源带来的「间接 mc 超类」
+        // （mod 没直接引用、故不在 missingAll）会被当成「确定存在」直接写进 superName /
+        // interfaces，而沙盒 / headless 门禁的 classpath 没有真实 MC jar ⇒ defineClass 期
+        // NoClassDefFoundError。这与 W0「net.minecraft.* 只报告不生成、绝不引用」一致：
+        // 真形状的价值在 neo→neo 继承链，mc 侧保持 Object 回落才能自洽。
+        if (dotted.startsWith("net.minecraft.")) return "java/lang/Object";
         if (neoMissing.contains(dotted)) {
             emitClass(dotted, neoMissing, missingAll, uses, shapes, outDir, done,
                     generated, failed, bytes, asInterface, itfDeclared);
@@ -350,8 +357,12 @@ public final class FakeStubGenerator {
             acc = Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC | Opcodes.ACC_FINAL;
         } else {
             // 普通类的字段丢掉 ACC_FINAL：生成物的字段没有 clinit 赋值，保留 final 会让
-            // 外部 putstatic 直接 IllegalAccessError（JVM 对 final 字段的跨类写有限制）
-            acc = (access & ~(Opcodes.ACC_FINAL | Opcodes.ACC_PRIVATE)) | Opcodes.ACC_PUBLIC;
+            // 外部 putstatic 直接 IllegalAccessError（JVM 对 final 字段的跨类写有限制）。
+            // 同时必须清掉 ACC_PROTECTED：形状源里的 protected 字段若只加 ACC_PUBLIC 会变成
+            // public|protected (0x5)，JVM 直接 ClassFormatError "Illegal field modifiers"
+            // （W3 real-shape 用真实形状源后踩到，7 个类整类加载失败）。
+            acc = (access & ~(Opcodes.ACC_FINAL | Opcodes.ACC_PRIVATE | Opcodes.ACC_PROTECTED))
+                    | Opcodes.ACC_PUBLIC;
         }
         FieldVisitor fv = cw.visitField(acc, name, desc, null, null);
         fv.visitEnd();

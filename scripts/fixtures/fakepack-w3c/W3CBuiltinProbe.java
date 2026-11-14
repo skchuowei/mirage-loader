@@ -38,6 +38,14 @@ public final class W3CBuiltinProbe {
         List<String> candidates = listBuiltinNeoClasses(fatJar);
         System.out.println("BUILTIN_RESOURCE_COUNT=" + candidates.size());
 
+        // real-shape（2026-11-14）：超类闭包会补进若干 compat 根路径**已有**的类
+        // （bus.api.Event / IConfigSpec / IModBusEvent ...）。它们在 DEFAULT 下就能由 compat
+        // 正常加载，字典序又排在最前 —— 若拿它们当目标，探针会误判「默认零变化被破坏」，
+        // 且 BUILTIN_ON 根本走不到 fallback（B_HITS=0）。这里显式跳过 compat 原生类，
+        // 只测「只有内置 pack 能提供、必须走 fallback」的类，才符合本探针的语义。
+        java.util.Set<String> compatRoot = listRootNeoClasses(fatJar);
+        System.out.println("COMPAT_ROOT_COUNT=" + compatRoot.size());
+
         URL[] urls = new URL[] { fatJar.toURI().toURL() };
         ClassLoader parent = ClassLoader.getPlatformClassLoader();
         MirageClassLoader mcl = new MirageClassLoader(urls, parent);
@@ -47,6 +55,7 @@ public final class W3CBuiltinProbe {
         String neoSuper = "<n/a>";
         int tried = 0;
         for (String c : candidates) {
+            if (compatRoot.contains(c)) continue;
             tried++;
             String r = tryLoad(mcl, c);
             if (r.startsWith("OK:")) {
@@ -99,6 +108,24 @@ public final class W3CBuiltinProbe {
             }
         } catch (Throwable t) {
             // 枚举失败不致命，交给 NEO_LOAD=CNFE 兜底
+        }
+        return out;
+    }
+
+    /** fat jar 根路径下的 neo 类（compat 原生 stub），探针须跳过它们。 */
+    private static java.util.Set<String> listRootNeoClasses(File fatJar) {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        if (!fatJar.isFile()) return out;
+        try (JarFile jf = new JarFile(fatJar)) {
+            java.util.Enumeration<JarEntry> e = jf.entries();
+            while (e.hasMoreElements()) {
+                String n = e.nextElement().getName();
+                if (n.startsWith("net/neoforged/") && n.endsWith(".class")) {
+                    out.add(n.substring(0, n.length() - ".class".length()).replace('/', '.'));
+                }
+            }
+        } catch (Throwable ignored) {
+            // 枚举失败不致命：不过滤时会退化为旧行为，门禁断言会如实变红
         }
         return out;
     }

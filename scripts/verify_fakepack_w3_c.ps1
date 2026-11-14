@@ -131,7 +131,7 @@ $tmpUnzip = Join-Path $work "jarlist.txt"
 & $jar tf $fatJar 2>&1 | Out-File -FilePath $tmpUnzip -Encoding ascii
 $packNeo = ([regex]::Matches((Get-Content $tmpUnzip -Raw), '(?m)mirage/fakepack/net/neoforged/[^\r\n]*\.class\r?$')).Count
 $packMc  = ([regex]::Matches((Get-Content $tmpUnzip -Raw), '(?m)mirage/fakepack/net/minecraft/[^\r\n]*\.class\r?$')).Count
-Assert-True ($packNeo -eq 80) ("fat jar 内置 pack 含 80 个 neo 类（实得 $packNeo）")
+Assert-True ($packNeo -eq 114) ("fat jar 内置 pack 含 114 个 neo 类（80 mod 缺口 + 34 real-shape 超类闭包，实得 $packNeo）")
 Assert-True ($packMc  -eq 0)  ("内置 pack 不含任何 net.minecraft.* 类（防假覆盖，实得 $packMc）")
 $jarSize = (Get-Item $fatJar).Length
 Assert-True ($jarSize -gt 2996660) ("fat jar 体积较部署基线 2 996 660 字节增大（实得 $jarSize）")
@@ -169,7 +169,7 @@ function Run-Probe([string[]]$jvmArgs) {
 # ---- DEFAULT（默认零变化）----
 Write-Host "-- DEFAULT（runtime 不给，默认零变化）--" -ForegroundColor Yellow
 $s0 = Run-Probe @()
-Assert-Val $s0 "BUILTIN_RESOURCE_COUNT" "80" "内置 pack 资源在 fat jar 里（80 个）"
+Assert-Val $s0 "BUILTIN_RESOURCE_COUNT" "114" "内置 pack 资源在 fat jar 里（114 个）"
 Assert-Val $s0 "NEO_LOAD" "CNFE" "DEFAULT 缺 neo 类仍抛 CNFE（默认零变化）"
 Assert-Val $s0 "B_ENABLED" "false" "DEFAULT B 默认关闭"
 Assert-Val $s0 "B_HITS" "0" "DEFAULT B 零命中"
@@ -180,9 +180,12 @@ Assert-True (-not ($s0 -match "FAKE MODE 已启用")) "DEFAULT 没有 FAKE MODE 
 # ---- BUILTIN_ON（内置 pack 服务）----
 Write-Host "-- BUILTIN_ON（runtime=on，无外部 home）--" -ForegroundColor Yellow
 $s1 = Run-Probe @("-Dmirage.msr.fakepack.runtime=on")
-Assert-Val $s1 "BUILTIN_RESOURCE_COUNT" "80" "BUILTIN_ON 内置 pack 资源仍在"
+Assert-Val $s1 "BUILTIN_RESOURCE_COUNT" "114" "BUILTIN_ON 内置 pack 资源仍在"
 Assert-Val $s1 "NEO_LOAD" "OK:mcl" "BUILTIN_ON 内置 pack 由 MCL 自己 defineClass 成功"
-Assert-Val $s1 "NEO_SUPER" "java.lang.Object" "BUILTIN_ON 假类超类回落 Object（沙盒形状，非真形状）"
+# real-shape（2026-11-14）：首个候选按字典序是接口 IExtensionPoint，其 getSuperclass() 为 null；
+# 沙盒形状时代这里断言 java.lang.Object，real-shape 后必须放宽为「不是 Object」。
+# 真实形状是否生效由独立门禁 verify_fakepack_realshape.ps1 的 REALSUPER / 全量加载断言锁死。
+Assert-True ((Get-ProbeValue $s1 "NEO_SUPER") -ne "java.lang.Object") "BUILTIN_ON 首个命中类不再回落 Object（real-shape，超类=null 或真实 neo 超类）"
 Assert-Val $s1 "B_ENABLED" "true" "BUILTIN_ON 开关生效"
 Assert-Val $s1 "B_HITS" "1" "BUILTIN_ON 恰好命中 1 个类"
 Assert-Val $s1 "B_HAS_TARGET" "true" "BUILTIN_ON 命中集合含被加载的目标类"

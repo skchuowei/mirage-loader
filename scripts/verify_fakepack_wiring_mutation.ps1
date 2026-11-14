@@ -90,11 +90,14 @@ $mutations = @(
        Repl = '        if (name == null || !name.startsWith("net.")) return null;'
        Key  = "B_PREFIX"
        Desc = "B 前缀闸放宽成 net. ⇒ pack 里的假 mc 类会被加载" },
+    # W3-C 后 initEnabled 不再硬性要求 home，只留 runtime=on 与 kill switch 两闸。
+    # 锚点同步为新判定（2026-11-14）；变异语义不变：去掉 runtime=on 闸 ⇒ 不给开关
+    # 也生效，W1 门禁的 B_HALF / 默认零变化断言必须变红。
     @{ Name = "B_RUNTIME"; File = $rfpFile
-       Find = '            if (home.isBlank() || !"on".equalsIgnoreCase(runtime)) return false;'
-       Repl = '            if (home.isBlank()) return false;'
+       Find = '            if (!"on".equalsIgnoreCase(runtime)) return false;'
+       Repl = '            if ("__never__".equalsIgnoreCase(runtime)) return false;'
        Key  = "B_RUNTIME"
-       Desc = "去掉 runtime=on 闸 ⇒ 只给 home 就生效" },
+       Desc = "去掉 runtime=on 闸 ⇒ 不给开关也生效" },
     @{ Name = "B_KILL";    File = $rfpFile
        Find = '            if ("off".equalsIgnoreCase(kill)) return false;'
        Repl = '            if ("__never__".equalsIgnoreCase(kill)) return false;'

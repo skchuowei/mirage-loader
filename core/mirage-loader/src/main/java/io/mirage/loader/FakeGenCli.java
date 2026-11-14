@@ -175,6 +175,21 @@ public final class FakeGenCli {
             return 1;
         }
 
+        // W3 real-shape（2026-11-14）：--only-file 允许显式要求生成「mod 没直接引用的
+        // 间接超类/接口」。这些类不在 mod 常量池缺口里，若不补进 missing，generate() 的
+        // toGenerate = neoMissing ∩ whitelist 会把它们裁掉；同时 resolveSuper 又因
+        // !missingAll.contains(dotted) 把它们当「确定存在」直接写进 superName ——
+        // 结果生成的子类引用了既不在 compat、也不在 pack 里的超类，加载期 NCDFE。
+        // 这里把白名单里的 neo 类当作显式请求的缺口，使 neoMissing/missingAll 覆盖整条
+        // 继承链，递归生成才会自洽。只放在 generate 之前：emit-missing 仍只输出 mod 的
+        // 真实缺口，per-mod 缺口统计（gaps 已收集完）也不受影响。
+        // 既有用法（白名单 ⊆ mod 缺口）行为逐字节不变，只是新增了「补齐闭包」的能力。
+        if (onDemand) {
+            for (String w : whitelist) {
+                if (w.startsWith(FakeStubGenerator.GENERATED_PREFIX)) missing.add(w);
+            }
+        }
+
         // ---- 生成 ----
         long t0 = System.currentTimeMillis();
         FakeStubGenerator.Result res;
