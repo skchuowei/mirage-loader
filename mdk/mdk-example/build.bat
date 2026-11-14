@@ -1,6 +1,6 @@
 @echo off
-REM Mirage Loader MDK 构建脚本
-REM 用法：build.bat [输出jar名]
+REM Mirage Loader MDK build script
+REM Usage: build.bat [output jar name]
 
 setlocal
 set MOD_ID=mdk-example
@@ -11,7 +11,7 @@ if "%JAR_NAME%"=="" set JAR_NAME=%MOD_ID%-%MOD_VERSION%.jar
 set JAVAC="C:\Program Files\Java\jdk-25.0.4\bin\javac.exe"
 set JAR="C:\Program Files\Java\jdk-25.0.4\bin\jar.exe"
 
-REM 路径配置（根据实际环境修改）
+REM Path configuration (adjust for your environment)
 set MC_JAR=D:\bing\MC\mcmoderr-my\mc-shili\versions\26.2\26.2.jar
 set MIRAGE_API=D:\bing\MC\mcmoderr-my\mirage-loader\build\mirage-launch-0.4.0.jar
 set GSON=D:\bing\MC\mcmoderr-my\mc-shili\libraries\com\google\code\gson\gson\2.14.0\gson-2.14.0.jar

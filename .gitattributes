@@ -1,0 +1,6 @@
+# cmd.exe requires CRLF line endings for .bat; bare LF breaks multi-line
+# if (...) blocks and goto labels. Keep .bat content pure ASCII too: cmd parses
+# it byte-by-byte with the OEM code page (CP936), so UTF-8 Chinese text can be
+# mis-decoded into command metacharacters (& / AT / parentheses) or swallow
+# neighbouring quotes and percent signs. See C105 in the experience notes.
+*.bat text eol=crlf
