@@ -66,10 +66,12 @@ function Assert-Val([string]$text, [string]$key, [string]$expected, [string]$des
 }
 
 function Find-Gradle {
+    # Windows 上必须调用 gradle.bat。无扩展名的 gradle 是 bash 脚本，PowerShell 5.1
+    # 会把它当「文档」，放进 2>&1 | Out-String 管道即抛 CantActivateDocumentInPipeline。
     $base = Join-Path $env:USERPROFILE ".gradle\wrapper\dists\gradle-9.1.0-bin"
     if (-not (Test-Path $base)) { return $null }
-    $cand = Get-ChildItem -Path $base -Recurse -Filter "gradle" -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match "gradle-9.1.0[\\/]bin[\\/]gradle$" -and -not $_.PSIsContainer } |
+    $cand = Get-ChildItem -Path $base -Recurse -Filter "gradle.bat" -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match "gradle-9.1.0[\\/]bin[\\/]gradle\.bat$" -and -not $_.PSIsContainer } |
             Select-Object -First 1
     if ($cand) { return $cand.FullName }
     return $null
@@ -112,10 +114,11 @@ Write-Host "   fatJar = $fatJar"
 if (-not $SkipBuild) {
     Write-Host "-- 构建 fat jar（:launcher:mirage-launch:fatJar）--" -ForegroundColor Yellow
     $gradle = Find-Gradle
-    if (-not $gradle) { Write-Host "[FATAL] 找不到 gradle 9.1.0（~/.gradle/wrapper/dists）"; exit 1 }
+    if (-not $gradle) { Write-Host "[FATAL] 找不到 gradle.bat 9.1.0（~/.gradle/wrapper/dists）"; exit 1 }
+    Write-Host "   gradle.bat = $gradle"
     $env:JAVA_HOME = $JavaHome
     $env:MSYS2_ARG_CONV_EXCL = "*"
-    $buildOut = & $gradle --no-daemon -p $Repo :launcher:mirage-launch:fatJar 2>&1 | Out-String
+    $buildOut = & $gradle --no-daemon -p $Repo ":launcher:mirage-launch:fatJar" 2>&1 | Out-String
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[FATAL] fat jar 构建失败:`n$buildOut"; exit 1
     }

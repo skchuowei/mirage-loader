@@ -32,6 +32,7 @@ BAT_REL = Path("scripts/run_w3c_diag.bat")
 PS1_REL = Path("scripts/run_w3c_diag.ps1")
 ATTR_REL = Path(".gitattributes")
 MDK_BAT_REL = Path("mdk/mdk-example/build.bat")
+W3C_PS1_REL = Path("scripts/verify_fakepack_w3_c.ps1")
 
 # 行首锚定：防止注释里的示例行骗过守卫（C77 / C82）。
 LAUNCH_ANCHOR = (
@@ -40,6 +41,14 @@ LAUNCH_ANCHOR = (
 )
 ATTR_ANCHOR = r'(?m)^\s*\*\.bat text eol=crlf\s*$'
 PAUSE_ANCHOR = r'(?m)^\s*pause >nul\s*$'
+
+# C106：完整门禁档(-Mode 1)会经 -Mode 1 调 verify_fakepack_w3_c.ps1 构建 fat jar。
+# Windows 的 gradle 发行包里 bin/gradle 是无扩展名 bash 脚本，PowerShell 5.1 会把它
+# 当「文档」，放进 2>&1 | Out-String 管道即抛 CantActivateDocumentInPipeline；
+# 必须只找 gradle.bat。三处同时锁死：filter、正则、调用行。
+GRADLE_FILTER_ANCHOR = r'(?m)^\s*\$cand = Get-ChildItem[^\r\n]*-Filter "gradle\.bat"'
+GRADLE_REGEX_ANCHOR = r'(?m)^\s*Where-Object \{[^\r\n]*gradle\\\.bat\$'
+GRADLE_CALL_ANCHOR = r'(?m)^\s*\$buildOut = & \$gradle[^\r\n]*":launcher:mirage-launch:fatJar"'
 
 
 class Gate:
@@ -167,11 +176,25 @@ def guard_layer(root: Path, bat_files=None, check_git: bool = True) -> Gate:
              ".ps1 保留中文四档菜单")
         g.ok("诊断结束" in st, ".ps1 保留中文结束横幅")
 
-    # 5. 门禁脚本里那两个 .bat 与 .ps1 的中文界面必须真的存在
+    # 5. 启动器调用链上的探针与完整门禁脚本必须存在
     g.ok((root / "scripts/fixtures/fakepack-w3c/W3CBuiltinProbe.java").exists(),
          "探针源码 W3CBuiltinProbe.java 存在")
-    g.ok((root / "scripts/verify_fakepack_w3_c.ps1").exists(),
-         "W3-C 门禁脚本存在")
+    w3c = g.read(W3C_PS1_REL)
+    g.ok(w3c is not None, "W3-C 门禁脚本存在")
+    if w3c is None:
+        return g
+
+    # 6. C106：完整门禁档的 gradle 调用必须是 gradle.bat（行首锚定 + 负向断言）
+    g.ok(w3c.startswith(b"\xef\xbb\xbf"), "W3-C 门禁脚本有 UTF-8 BOM")
+    wt = w3c[3:].decode("utf-8", "replace")
+    for anchor in [GRADLE_FILTER_ANCHOR, GRADLE_REGEX_ANCHOR, GRADLE_CALL_ANCHOR]:
+        g.ok(bool(re.search(anchor, wt)), f"W3-C gradle 守卫锚点 {anchor[:52]}")
+    g.ok('-Filter "gradle"' not in wt,
+         "W3-C 门禁不再用无扩展名 gradle 作 filter（否则管道里抛 CantActivateDocumentInPipeline）")
+    g.ok('bin[\\\\/]gradle$"' not in wt,
+         "W3-C 门禁正则不锁到无扩展名 gradle")
+    g.ok("CantActivateDocumentInPipeline" in wt,
+         "W3-C 门禁注释记录根因，防止后人改回 bash 脚本")
     return g
 
 
@@ -244,6 +267,36 @@ def behaviour_layer(root: Path) -> Gate:
             g.ok(bad not in outb, f"cmd 解析 .bat 无报错形态 {bad}")
     except FileNotFoundError:
         g.ok(False, "cmd.exe 可用（端到端验证必需）")
+
+    # C106：完整门禁档的 gradle 调用链。PS 5.1 里无扩展名 gradle 被当「文档」，
+    # 放进 2>&1 | Out-String 管道必抛 CantActivateDocumentInPipeline；gradle.bat 必须
+    # RC=0。这里同时做负向自检（证明判据有区分度）与正向验证（修复真的可用）。
+    dist = Path.home() / ".gradle" / "wrapper" / "dists" / "gradle-9.1.0-bin"
+    gradle_bin = None
+    if dist.exists():
+        for p in sorted(dist.rglob("gradle.bat")):
+            if re.search(r"gradle-9\.1\.0[\\/]bin[\\/]gradle\.bat$", str(p)):
+                gradle_bin = p.parent
+                break
+    g.ok(gradle_bin is not None, "全局 Gradle 9.1.0 的 gradle.bat 存在")
+    if gradle_bin is not None:
+        path = str(gradle_bin).replace("'", "''")
+        code = (
+            f"$b = '{path}'\n"
+            "try { $x = & (Join-Path $b 'gradle') --version 2>&1 | Out-String; "
+            "'BARE=NO_ERROR' } catch { 'BARE=' + $_.FullyQualifiedErrorId }\n"
+            "try { $y = & (Join-Path $b 'gradle.bat') --version 2>&1 | Out-String; "
+            "'BAT_RC=' + $LASTEXITCODE } catch { 'BAT=' + $_.FullyQualifiedErrorId }\n"
+        )
+        rg = subprocess.run(
+            [exe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", code],
+            cwd=str(root), capture_output=True, timeout=180,
+        )
+        outg = decode(rg.stdout + rg.stderr)
+        g.ok("BARE=CantActivateDocumentInPipeline" in outg,
+             "行为负向自检：无扩展名 gradle 在管道里确实抛 CantActivateDocumentInPipeline")
+        g.ok("BAT_RC=0" in outg,
+             "行为层：gradle.bat 在管道里可正常执行（RC=0）")
     return g
 
 
@@ -251,7 +304,7 @@ def make_copy(root: Path, dst: Path) -> None:
     """把门禁需要的文件复制到沙盒，保持相对路径。"""
     rels = [BAT_REL, PS1_REL, ATTR_REL, MDK_BAT_REL,
             Path("scripts/fixtures/fakepack-w3c/W3CBuiltinProbe.java"),
-            Path("scripts/verify_fakepack_w3_c.ps1")]
+            W3C_PS1_REL]
     for rel in rels:
         src = root / rel
         if src.exists():
@@ -337,16 +390,40 @@ def mutation_layer(root: Path, tmp: Path) -> Gate:
         p.write_bytes(p.read_bytes().replace("请选择 [2]".encode("utf-8"),
                                              b"Select [2]"))
 
+    # C106：把 W3-C 门禁的 gradle.bat 调用链改回坏形态，守卫必须逐个判红。
+    def m_w3c_bare_filter(d):
+        p = d / W3C_PS1_REL
+        raw = p.read_bytes()
+        assert b'-Filter "gradle.bat"' in raw, "gradle.bat filter anchor missing"
+        p.write_bytes(raw.replace(b'-Filter "gradle.bat"', b'-Filter "gradle"', 1))
+
+    def m_w3c_bare_regex(d):
+        p = d / W3C_PS1_REL
+        raw = p.read_bytes()
+        assert b'gradle\\.bat$' in raw, "escaped gradle.bat regex anchor missing"
+        p.write_bytes(raw.replace(b'gradle\\.bat$', b'gradle$', 1))
+
+    def m_w3c_no_build_call(d):
+        p = d / W3C_PS1_REL
+        raw = p.read_bytes()
+        line = (b'    $buildOut = & $gradle --no-daemon -p $Repo '
+                b'":launcher:mirage-launch:fatJar" 2>&1 | Out-String\n')
+        assert line in raw, "fatJar build call line missing"
+        p.write_bytes(raw.replace(line, b'    # build call removed\n', 1))
+
     for name, fn in [
         ("bat_bom", m_bom), ("bat_lf", m_lf), ("bat_chinese", m_chinese),
         ("bat_no_launch", m_no_launch), ("bat_no_pause", m_no_pause),
         ("no_gitattributes", m_no_attr), ("ps1_no_bom", m_ps1_no_bom),
         ("ps1_lf", m_ps1_lf), ("ps1_no_menu", m_ps1_no_menu),
+        ("w3c_bare_filter", m_w3c_bare_filter),
+        ("w3c_bare_regex", m_w3c_bare_regex),
+        ("w3c_no_build_call", m_w3c_no_build_call),
     ]:
         case(name, fn)
 
     # 字节级还原校验：源文件在整轮变异中未被触碰
-    for rel in [BAT_REL, PS1_REL, ATTR_REL, MDK_BAT_REL]:
+    for rel in [BAT_REL, PS1_REL, ATTR_REL, MDK_BAT_REL, W3C_PS1_REL]:
         g.ok((root / rel).read_bytes() == (base / rel).read_bytes(),
              f"源文件 {rel.as_posix()} 字节级未变")
     return g
