@@ -1,0 +1,10 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "mexfixture.mixins",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": ["MexReturnMixin", "MexWrapMixin"],
+  "mixinextras": {
+    "minVersion": "0.5.0"
+  }
+}

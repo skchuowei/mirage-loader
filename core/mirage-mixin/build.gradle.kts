@@ -10,6 +10,10 @@ dependencies {
     // mixin jar 自带 ASM 阴影副本，但为对齐 Java 25 / class v69，
     // 我们仍显式依赖 asm 9.9，运行时由 MG 统一类加载。
     implementation(libs.mixin)
+    // MixinExtras 0.5.5（MIT）：mod mixin 的 @ModifyReturnValue/@WrapOperation 等注入器运行时。
+    // 经 launcher fatJar 的 runtimeClasspath 自动 shade；不 relocate（mod 按原包名链接）。
+    // 初始化点在 MirageMixinBootstrap.init（setActiveTransformer 之后，时序硬约束）。
+    implementation(libs.mixinextras.common)
     // 编译期需要原版 26.2 客户端类（CreativeModeInventoryScreen / CreativeModeTab /
     // Button / Component 等）及 brigadier（Component 的父接口类型）。仅 compileOnly：
     // 不打进 fat jar，也不做运行期依赖。

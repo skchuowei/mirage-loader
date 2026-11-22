@@ -38,6 +38,21 @@ public final class MirageMixinBootstrap {
             transformer = svc.getTransformerFactory().createTransformer();
             env.setActiveTransformer(transformer);
 
+            // MixinExtras 初始化（mod 的 @ModifyReturnValue/@WrapOperation/@ModifyExpressionValue 等）。
+            // 时序硬约束（2026-11-22 探针实证）：必须在 setActiveTransformer 之后——
+            // MixinExtrasBootstrap.init() 内部走 MixinInternals.getExtensions()，
+            // 取 getActiveTransformer().getExtensions()，过早调用直接 NPE。
+            // 必须在 addConfiguration 之前：注入器要在 config 解析前注册进 InjectionInfo 注册表。
+            // 失败只 WARN 不阻断：库缺失/异常时 MG 仍可启动，只是 MixinExtras 注入器不生效
+            // （与「关键织入失败才致命」的分级一致；mod 声明 mixinextras.minVersion 不满足时
+            // 由 MirageMixinService 在 config 加载期单独致命，见那边的校验）。
+            try {
+                com.llamalad7.mixinextras.MixinExtrasBootstrap.init();
+                MirageLog.MIXIN.info("MixinExtras " + com.llamalad7.mixinextras.MixinExtrasBootstrap.getVersion() + " 已初始化");
+            } catch (Throwable t) {
+                MirageLog.MIXIN.warn("MixinExtras 初始化失败（mod 的 MixinExtras 注入器将不生效）", t);
+            }
+
             for (String c : configs) {
                 env.addConfiguration(c);
                 MirageLog.MIXIN.info("注册 mixin config: " + c);

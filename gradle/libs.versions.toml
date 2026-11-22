@@ -5,6 +5,8 @@ mirage = "0.1.0"
 # 字节码
 asm = "9.9"    # 9.7 不支持 Java 25 (class v69)，A2 必须能读 MC 26.x 的 mod jar
 mixin = "0.8.7"   # 临时用 upstream，M3 切到自维护 fork
+mixinextras = "0.5.5"   # MixinExtras 官方支持面含 Mixin 0.8.7（自带 MixinVersionImpl_v0_8…v0_8_7）
+                        # 2026-11-22 探针实测 0.5.5 on 0.8.7 注入真实织入；NeoForge 26.x 线内置 0.5.4+
 
 # 日志
 log4j = "2.24.1"
@@ -23,6 +25,9 @@ asm-tree = { module = "org.ow2.asm:asm-tree", version.ref = "asm" }
 asm-analysis = { module = "org.ow2.asm:asm-analysis", version.ref = "asm" }
 asm-util = { module = "org.ow2.asm:asm-util", version.ref = "asm" }
 mixin = { module = "org.spongepowered:mixin", version.ref = "mixin" }
+# MixinExtras 平台无关整包（README "Any other platform" 路线）：MIT、pom 零依赖、含完整库。
+# 不 relocate——mod 二进制按 com.llamalad7.mixinextras.* 原包名链接（见 docs/plans/2026-11-22_MG-MixinExtras集成.md）。
+mixinextras-common = { module = "io.github.llamalad7:mixinextras-common", version.ref = "mixinextras" }
 gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
 guava = { module = "com.google.guava:guava", version.ref = "guava" }
 log4j-api = { module = "org.apache.logging.log4j:log4j-api", version.ref = "log4j" }

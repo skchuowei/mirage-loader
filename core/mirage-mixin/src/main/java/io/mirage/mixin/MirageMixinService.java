@@ -124,23 +124,81 @@ public class MirageMixinService extends MixinServiceAbstract
             raw = ClassLoader.getSystemResourceAsStream(name);
         }
         if (raw == null) return null;
-        // 对 mod 的 mixin config 做后处理：删掉 compatibilityLevel 字段，
-        // 因为 Sponge Mixin 0.8.7 在 Java 25 下会拒绝 JAVA_17/21 的硬性声明。
-        if (name.endsWith(".mixin.json") && !name.equals("mirage.mixins.json")) {
+        // 对 mod 的 mixin config 做后处理（2026-11-22 修正后缀匹配：单数 .mixin.json 与
+        // 复数 .mixins.json 都要走——此前只认单数，mod 常见的 *.mixins.json 整个绕过剥离，
+        // compatibilityLevel: JAVA_21 直接 MixinInitialisationError，探针已复现）。
+        if ((name.endsWith(".mixin.json") || name.endsWith(".mixins.json"))
+                && !name.equals("mirage.mixins.json")) {
             try {
                 String json = new String(raw.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
                 raw.close();
+                // mixinextras.minVersion 前置校验（2026-11-22，用户拍板：不满足启动致命）。
+                // 键本身保留不剥——MixinExtras 自己的 MixinConfigUtils 也会读它。
+                checkMixinExtrasMinVersion(name, json);
                 // 删除 compatibilityLevel（Java 25 不支持声明的级别）
                 json = json.replaceAll("\"compatibilityLevel\"\\s*:\\s*\"[^\"]*\"\\s*,?", "");
-                // 删除 mixinextras（Sponge Mixin 0.8.7 不支持 MixinExtras），连同前面的逗号
-                json = json.replaceAll(",?\\s*\"mixinextras\"\\s*:\\s*\\{[^}]*\\}", "");
                 MirageLog.MIXIN.info("后处理 mixin config: " + name);
                 return new java.io.ByteArrayInputStream(json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             } catch (Exception e) {
+                // 注意：minVersion 校验抛的是 Error（不是 Exception），不会进这里、不会被降级吞掉。
                 MirageLog.MIXIN.warn("后处理 " + name + " 失败", e);
             }
         }
         return raw;
+    }
+
+    /**
+     * 校验 mod mixin config 声明的 {@code mixinextras.minVersion} 是否被内置版本满足。
+     *
+     * <p>不满足 → {@code [MG-FATAL]} + 抛 Error 让启动失败（宁可响亮地死不要静默地坏：
+     * 放过去的话该 mod 的 MixinExtras 注入器会静默失效）。满足 → INFO 记一笔。
+     * 无声明 / 无 minVersion 字段 → 不动作。版本串解析不了 → WARN 放行（不因怪串杀启动）。
+     */
+    private static void checkMixinExtrasMinVersion(String name, String json) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("\"mixinextras\"\\s*:\\s*\\{[^}]*?\"minVersion\"\\s*:\\s*\"([^\"]+)\"")
+                .matcher(json);
+        if (!m.find()) {
+            return;
+        }
+        String required = m.group(1);
+        String bundled;
+        try {
+            bundled = com.llamalad7.mixinextras.MixinExtrasBootstrap.getVersion();
+        } catch (Throwable t) {
+            throw new Error("[MG-FATAL] mixin config " + name + " 要求 mixinextras >= " + required
+                    + "，但 MG 未内置 MixinExtras —— 该 config 的注入器会静默失效，这里选择让启动失败");
+        }
+        if (bundled == null) bundled = "0";
+        if (versionLess(bundled, required)) {
+            io.mirage.api.error.MirageErrors.fatal("mixin config " + name + " 要求 mixinextras >= " + required
+                    + "，MG 内置 " + bundled + " —— 版本不满足会让该 mod 的注入器静默失效，这里选择让启动失败");
+            throw new Error("mixinextras.minVersion not satisfied: config " + name + " requires >= " + required
+                    + ", bundled " + bundled);
+        }
+        MirageLog.MIXIN.info("mixin config " + name + " 要求 mixinextras >= " + required
+                + "，内置 " + bundled + "，满足");
+    }
+
+    /** 逐数字段比较 "a < b"；任一段解析失败退回 String.compareTo < 0。 */
+    private static boolean versionLess(String a, String b) {
+        String[] pa = a.split("[.+_-]");
+        String[] pb = b.split("[.+_-]");
+        int n = Math.max(pa.length, pb.length);
+        for (int i = 0; i < n; i++) {
+            String sa = i < pa.length ? pa[i] : "0";
+            String sb = i < pb.length ? pb[i] : "0";
+            int cmp;
+            try {
+                cmp = Integer.compare(Integer.parseInt(sa), Integer.parseInt(sb));
+            } catch (NumberFormatException e) {
+                cmp = sa.compareTo(sb);
+            }
+            if (cmp != 0) {
+                return cmp < 0;
+            }
+        }
+        return false;
     }
 
     /** 暴露给 Bootstrap：拿到 MixinBootstrap.init() 后 offer 进来的 transformer factory。 */
