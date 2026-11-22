@@ -412,6 +412,12 @@ headless 探针（不创建窗口、不写 mc-shili/）可自行启动，但要�
 
 ### 9. 自研 ASM Transformer 与 Mixin 的转换顺序冲突
 
+> **【本节描述的顺序已过时·2026-11-22，commit `dbfcc69`】** 当前顺序已改为
+> `原版字节 → mod Mixin → MG 自研 ASM（冲突让路）→ defineClass`，不再"二选一"。
+> 判定逻辑在 `io.mirage.mixin.WeavePriority`，目标收集在 `ModMixinTargets`（S3、MC 类加载前），
+> mod `@Mixin` 命中 MG 硬编码目标时 **MG 让路并打 WARN**。门禁 `verify_mixin_order.py` 87/87。
+> 本节原文保留作历史坑位追溯，**不要再按"ASM 先"的旧口径调试**。
+
 - `MirageClassLoader` 里 transformer 链的执行顺序很关键：如果 `MirageTransformer`（自研 ASM）先改写了 MC 类字节码（比如加了 `visitCode` 里的打印语句），再交给 `MirageMixinBootstrap.transform` 处理，Mixin 拿到的是被 ASM 改过的字节码。
 - ASM 改写后如果没用 `COMPUTE_FRAMES` 重算栈映射帧，或者破坏了 LineNumberTable / LocalVariableTable 等调试信息，Mixin 在处理时可能抛 `MixinTransformerError`。
 - **调试顺序问题时**：先读 `MirageClassLoader` 源码，确认 transformer 链的注册顺序和执行顺序——谁先谁后。当前已知 `SharedConstants` 这个类在 ASM 注入后交给 Mixin 时转换失败，是顺序冲突的典型案例。
