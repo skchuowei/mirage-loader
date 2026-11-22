@@ -53,9 +53,29 @@ public final class MirageMixinBootstrap {
                 MirageLog.MIXIN.warn("MixinExtras 初始化失败（mod 的 MixinExtras 注入器将不生效）", t);
             }
 
+            // 记下实际注册的 config 清单：下面收集 mod @Mixin 目标类还要用一次（入参只是 Iterable，
+            // 不保证可重复遍历）
+            java.util.List<String> registeredConfigs = new java.util.ArrayList<>();
             for (String c : configs) {
+                registeredConfigs.add(c);
                 env.addConfiguration(c);
                 MirageLog.MIXIN.info("注册 mixin config: " + c);
+            }
+
+            // 织入优先级（用户拍板·社区最大化，AGENTS.md §16）：先收集 mod @Mixin 的目标类，
+            // 供 MirageClassLoader 在跑 MG 自研 ASM 前判「要不要让路」。
+            // 时机：必须在 config 注册之后（config 与 mixin 类此时才保证可从 mcl 读到），
+            // 且必须早于任何 net.minecraft.* 类加载（init 在 S3，类加载在 S4/S7，天然满足）。
+            // 失败只 WARN：收集不到 ⇒ 空集 ⇒ 不让路、保持老行为，绝不让观测能力拖垮启动。
+            try {
+                java.util.Set<String> modTargets = ModMixinTargets.collect(mcl, registeredConfigs);
+                WeavePriority.setModMixinTargets(modTargets);
+                java.util.List<String> conflicts = WeavePriority.conflicts();
+                MirageLog.MIXIN.info("mod @Mixin 目标类 " + modTargets.size()
+                        + " 个；与 MG 自研织入的硬编码目标冲突 " + conflicts.size() + " 处"
+                        + (conflicts.isEmpty() ? "" : " -> " + conflicts + "（这些类 MG 自研织入将让路，逐类打 WARN）"));
+            } catch (Throwable t) {
+                MirageLog.MIXIN.warn("收集 mod @Mixin 目标类失败（MG 自研织入不做让路判定，保持老行为）", t);
             }
 
             // 强制 processor 加载 pendingConfigs（在我们的环境里 addConfiguration 后不会自动触发）

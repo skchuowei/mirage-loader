@@ -1,5 +1,7 @@
 package io.mirage.loader;
 
+import io.mirage.api.log.MirageLog;
+
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -112,11 +114,24 @@ public class MirageClassLoader extends URLClassLoader {
             }
             return super.findClass(name);
         }
-        // 1) MG 自研 ASM transformer（调试 UI、资源命名空间、创造模式分页等硬编码织入）
-        byte[] transformed = transformer.transform(name, original);
-        // 2) SpongePowered Mixin 管线（mod 通过 @Inject/@Redirect 织入目标 MC 类）
-        //    Bootstrap 未就绪时该调用直接原样返回字节码，不影响现有行为。
-        transformed = io.mirage.mixin.MirageMixinBootstrap.transform(name, transformed);
+        // 织入顺序（用户拍板·社区最大化，AGENTS.md 技术注意事项 §16）：
+        //   原版字节 → mod Mixin → MG 自研织入 → defineClass
+        // 为什么 Mixin 必须在最前：mod 的 @Mixin 是按「原版字节码」写的（注入点由 @At(FIELD/INVOKE)
+        // 精确定位、局部变量表与栈映射帧都按原版算）。先让 MG 的 ASM 改一遍再交给 Mixin，等于让 mod
+        // 面对一份被改造过的字节码——注入点失配、甚至 MixinTransformerError（§9：SharedConstants
+        // 在 ASM 注入后交给 Mixin 就转换失败过）。§16 禁 1「禁止合并/改造游戏本体字节码」把这条钉成硬禁令。
+        //
+        // 1) mod Mixin 先跑（Bootstrap 未就绪时原样返回字节码，不影响现有行为）
+        byte[] transformed = io.mirage.mixin.MirageMixinBootstrap.transform(name, original);
+        // 2) MG 自研 ASM transformer（调试 UI、资源命名空间、创造模式分页等硬编码织入）后跑。
+        //    与 mod 的 @Mixin 目标类冲突时让路：放弃 MG 对该类的织入，并 WARN 说清放弃了什么
+        //    —— 禁止无声放弃。目标类与判定见 io.mirage.mixin.WeavePriority。
+        io.mirage.mixin.WeavePriority.Decision weaving = io.mirage.mixin.WeavePriority.decide(name);
+        if (weaving.applyMgWeaving) {
+            transformed = transformer.transform(name, transformed);
+        } else {
+            MirageLog.MIRAGE.warn(weaving.describe());
+        }
         // 仪表盘真实计数：每有一个类经过 Mixin 管线就 +1（分母未知，故只计数不画百分比）。
         LoadProgress.increment("mixin.classes");
         return defineClass(name, transformed, 0, transformed.length);
