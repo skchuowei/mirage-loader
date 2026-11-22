@@ -455,3 +455,17 @@ headless 探针（不创建窗口、不写 mc-shili/）可自行启动，但要�
 - **离页元素渲染**：隐藏在屏幕外的 tab 如果还在 `extractTabButton(selectedTab)` 里走完整 blit，虽然视觉看不见，但 GPU 仍在做无效绘制——离页元素应直接 return，不要走完整渲染。
 - **全局翻页 UX**：TOP/BOTTOM 行数不同时，总页数取 max，短的那行翻页时会留白——这是设计选择，但要明确这是全局翻页不是单行翻页。
 
+### 16. 跨加载器兼容的四条禁令（2026-11-22，反面教材固化）
+
+> 来源：《智能纪要：MC模组加载器相关内容分析 2026-10-07》对 Forbrick/Forge Kernel 的实测批判；
+> 决策全文 `docs/plans/2026-11-22_C决策复盘与计划补丁.md`。这些是**硬禁令**，不是建议。
+
+- **禁 1 · 禁止合并/改造游戏本体字节码**：合并工具丢事件调用、破坏 mod 的 `@Inject` 注入点（基于原版字节码）。mod 必须面对原版 MC 字节码；MG 自研织入放 mod Mixin 之后，冲突时让路。
+- **禁 2 · 禁止跨运行时事件桥 / 多运行时共存**：同一 JVM 跑两套总线靠桥转发，实测 103 种 Forge 事件 + 1 种 NeoForge 事件不可触发。一次只提供一套 API 语义层。
+- **禁 3 · 禁止静默跳过失败的 Mixin / "非必须注入"兜底**：Fabric Mixin 全改非必须、失败静默跳过 → 兼容是假的。保持 FATAL 铁律（`MirageMixinBootstrap` 响亮崩），失败必须定位到类+方法+mixin 名。GitHub `Sinytra/Connector` 里的 `silenceClasses` 静默降级是反面案例，不许借鉴。
+- **禁 4 · 禁止靠试错排启动顺序**：反面教材的时间表"不是设计出来的，是出事之后一次次改出来的"，对加载顺序敏感的 mod 不可预期。顺序必须是设计驱动的拓扑序（借鉴 Connector 的 `OrderingHint` + `TopologicalSort`）。
+
+**织入优先级（用户裁定·社区最大化）**：`原版字节 → mod Mixin → MG 自研织入 → defineClass`。
+MG 自研 transformer 目标类（硬编码 7 个）与 mod 的 `@Mixin` 目标求交集，命中即**放弃 MG 对该类的织入**，
+并打 WARN 说明放弃了什么——禁止无声放弃。先做类级交集，验证后再细化到方法级。
+
