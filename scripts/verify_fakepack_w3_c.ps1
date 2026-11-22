@@ -185,12 +185,18 @@ Write-Host "-- BUILTIN_ON（runtime=on，无外部 home）--" -ForegroundColor Y
 $s1 = Run-Probe @("-Dmirage.msr.fakepack.runtime=on")
 Assert-Val $s1 "BUILTIN_RESOURCE_COUNT" "114" "BUILTIN_ON 内置 pack 资源仍在"
 Assert-Val $s1 "NEO_LOAD" "OK:mcl" "BUILTIN_ON 内置 pack 由 MCL 自己 defineClass 成功"
-# real-shape（2026-11-14）：首个候选按字典序是接口 IExtensionPoint，其 getSuperclass() 为 null；
+# real-shape（2026-11-14）：候选超类按真实形状可能为 null（接口）；
 # 沙盒形状时代这里断言 java.lang.Object，real-shape 后必须放宽为「不是 Object」。
 # 真实形状是否生效由独立门禁 verify_fakepack_realshape.ps1 的 REALSUPER / 全量加载断言锁死。
+# 【2026-11-22 更正】旧注释写「首个候选是 IExtensionPoint」已过时：该类已在 W3-C2 P0 实现进
+# compat 根路径，探针按设计跳过 compat 原生类（C101），候选随根路径集合漂移。
 Assert-True ((Get-ProbeValue $s1 "NEO_SUPER") -ne "java.lang.Object") "BUILTIN_ON 首个命中类不再回落 Object（real-shape，超类=null 或真实 neo 超类）"
 Assert-Val $s1 "B_ENABLED" "true" "BUILTIN_ON 开关生效"
-Assert-Val $s1 "B_HITS" "1" "BUILTIN_ON 恰好命中 1 个类"
+# B_HITS 改相对判据（C104：绝对值不作阈值）。探针挑的是「不在 compat 根路径且能加载」的
+# 第一个类，其传递依赖数随 compat 覆盖面演进（C1 29 类、W3-C2 3 类）而变，钉死 1 会假红。
+# 本门禁真正要证明的是「fallback 能服务且命中集合含目标」，由下面 B_HAS_TARGET 断言锁死。
+$bHits = [int](Get-ProbeValue $s1 "B_HITS")
+Assert-True ($bHits -gt 0) "BUILTIN_ON 命中数 > 0（实得 $bHits，相对判据）"
 Assert-Val $s1 "B_HAS_TARGET" "true" "BUILTIN_ON 命中集合含被加载的目标类"
 Assert-Val $s1 "MC_LOAD" "CNFE" "BUILTIN_ON 前缀闸：net.minecraft 不被服务"
 Assert-Val $s1 "ION_LOAD" "CNFE" "BUILTIN_ON 前缀闸：io.mirage.neoforge 不被服务"
