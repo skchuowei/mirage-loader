@@ -53,7 +53,7 @@
 | D8 | 服务端 | **双端**（client + dedicated server），公共 API 不引用 client 类 | 服务器场景必须支持。 |
 | D9 | 类加载器 | **单层隔离 + 模块懒加载**：`MirageClassLoader` 挂在 Launch 之上；核心 jar 启动时加载，模块 jar 仅在被 `requires` 或首次类引用时才拉入 | 避免多层 URLClassLoader 复杂度；这是"不调用不加载"的物理基础。 |
 | D10 | 兼容性目标版本 | **只支持 MC 26.2 起**，不做向下兼容 | 新项目不背历史包袱。 |
-| D11 | 对其他加载器的立场 | **零依赖**：不加载、不反射、不 classpath 引用 Fabric Loader / NeoForge / Forge 的任何类 | "独立加载器"是硬约束。 |
+| D11 | 对其他加载器的立场 | ~~**零依赖**：不加载、不反射、不 classpath 引用 Fabric Loader / NeoForge / Forge 的任何类~~ **【已推翻·2026-11-22】** | ~~"独立加载器"是硬约束。~~ **【已过时·2026-11-22】** 用户裁定终极目标＝「全部加载器 mod 全部互通」，零依赖与该目标数学上互斥（穷举 1741 neo 类追不上、GUI 事件注入点 0）。新方向＝**松动 D11，转路线 C：按 mod 原生类型调度真实加载器运行时，Mirage 做统一调度层**。原文保留备查，详见 `docs/2026-11-22_转向C前的现状梳理.md` 与 `docs/agents/A9-Report/DECISION-LOG.md` 同日条目 |
 
 ---
 
